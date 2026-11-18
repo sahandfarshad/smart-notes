@@ -52,6 +52,7 @@ export function parseAiResult(text, raw) {
 export async function callProvider(p, system, user) {
   if (!p) throw new Error('No active AI provider');
   if (!p.apiKey) throw new Error('API key is empty: ' + p.name);
+  if (!p.model) throw new Error('No model selected for ' + p.name);
   const base = str(p.baseUrl).replace(/\/+$/, '');
   let res, body;
   if (p.kind === 'gemini') {
@@ -86,6 +87,50 @@ export async function callProvider(p, system, user) {
   return body?.choices?.[0]?.message?.content || '';
 }
 
+/** list the models a provider offers (so the user never types a model name) */
+export async function listModels(p) {
+  if (!p?.apiKey) throw new Error('API key is empty');
+  const base = str(p.baseUrl).replace(/\/+$/, '');
+  let res, body;
+  if (p.kind === 'gemini') {
+    const out = []; let page = '';
+    do {
+      res = await fetch(`${base}/models?pageSize=1000&key=${encodeURIComponent(p.apiKey)}${page ? '&pageToken=' + encodeURIComponent(page) : ''}`);
+      body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error?.message || `HTTP ${res.status}`);
+      for (const m of body.models || []) {
+        if (!(m.supportedGenerationMethods || []).includes('generateContent')) continue;
+        const id = str(m.name).replace(/^models\//, '');
+        if (/embedding|aqa|imagen|veo|tts|image-generation|native-audio|live/i.test(id)) continue;
+        out.push({ id, name: m.displayName || id, info: m.description ? str(m.description).slice(0, 120) : '' });
+      }
+      page = body.nextPageToken || '';
+    } while (page);
+    return sortModels(out);
+  }
+  if (p.kind === 'anthropic') {
+    res = await fetch(`${base}/models?limit=1000`, { headers: { 'x-api-key': p.apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' } });
+    body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body?.error?.message || `HTTP ${res.status}`);
+    return sortModels((body.data || []).map(m => ({ id: m.id, name: m.display_name || m.id, info: '' })));
+  }
+  res = await fetch(`${base}/models`, { headers: { Authorization: `Bearer ${p.apiKey}` } });
+  body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body?.error?.message || `HTTP ${res.status}`);
+  return sortModels((body.data || body.models || []).map(m => ({ id: m.id || m.name, name: m.name || m.id, info: '' }))
+    .filter(m => m.id && !/embed|whisper|tts|dall-e|moderation|audio|transcribe|image/i.test(m.id)));
+}
+const sortModels = list => list.sort((a, b) => b.id.localeCompare(a.id, 'en', { numeric: true }));
+
+/** quick real test of one model: returns { ok, ms, reply | error } */
+export async function testModel(p, model) {
+  const t = Date.now();
+  try {
+    const reply = await callProvider({ ...p, model }, 'Reply with JSON {"ok":true}', 'ping');
+    return { ok: true, ms: Date.now() - t, reply: str(reply).slice(0, 120) };
+  } catch (e) { return { ok: false, ms: Date.now() - t, error: str(e.message || e).slice(0, 300) }; }
+}
+
 export async function classifyText(provider, raw, notes) {
   return parseAiResult(await callProvider(provider, SYSTEM_PROMPT, buildUserPrompt(raw, notes)), raw);
 }
@@ -102,6 +147,7 @@ export function newNote(raw) {
 }
 /** merge two note lists by uid, newest updated_at wins (tombstones included) */
 export function mergeNotes(a, b) {
+  a = a || []; b = b || [];
   const map = new Map();
   for (const n of [...a, ...b]) {
     const cur = map.get(n.uid);
@@ -181,3 +227,6 @@ export function decodeSyncToken(t) {
   if (!o.u || !o.k) throw new Error('توکن نامعتبر است');
   return { url: o.u.replace(/\/+$/, ''), key: o.k };
 }
+
+/** AI settings travel between server and phone as one object; newest updated_at wins */
+export const newerAi = (a, b) => (!a ? b : !b ? a : str(b.updated_at) > str(a.updated_at) ? b : a);

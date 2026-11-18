@@ -19,6 +19,7 @@
       <button id="save" class="primary">ثبت</button>
     </div>
     <div class="searchbox"><span>🔍</span><input id="q1" type="search" placeholder="جستجو…" autocomplete="off" enterkeyhint="search" /></div>
+    <div id="connect-banner" class="banner" hidden>📡 اپ هنوز به سرور وصل نیست. <button id="go-connect">اتصال با توکن</button></div>
     <div id="count1" class="hint"></div>
     <div id="results1" class="list"></div>
   </section>
@@ -34,13 +35,26 @@
 
   <!-- PAGE 3: settings -->
   <section id="page-settings" class="page">
+    <div id="server-app" hidden>
+      <h3>🖥️ اتصال به سرور</h3>
+      <div id="server-off">
+        <p class="hint">توکن را از پنل وب (تنظیمات › اتصال اپ اندروید) یا در SSH از <code>smartnotes</code> › گزینه 9 کپی کنید و اینجا بچسبانید. بعد از اتصال، تنظیمات هوش مصنوعی از سرور می‌آید و همه یادداشت‌ها دوطرفه همگام می‌شوند.</p>
+        <textarea id="paste-token" dir="ltr" rows="3" placeholder="sn1.…"></textarea>
+        <div class="row"><button id="paste-clip">📋 چسباندن</button><button id="connect" class="primary">اتصال</button></div>
+      </div>
+      <div id="server-on" hidden>
+        <p>✅ وصل به: <b id="server-url" dir="ltr"></b><br /><span class="hint">آخرین همگام‌سازی: <span id="last-sync">—</span></span></p>
+        <p class="hint">همگام‌سازی خودکار است: موقع باز کردن اپ، بعد از هر ثبت/ویرایش/حذف و هر یک دقیقه. از هر طرف هر چیزی اضافه، ویرایش یا حذف شود، طرف دیگر هم همان می‌شود.</p>
+        <div class="row"><button id="sync-now" class="primary">🔄 همگام‌سازی الان</button><button id="disconnect" class="danger">قطع اتصال</button></div>
+      </div>
+    </div>
+
     <h3>🤖 هوش مصنوعی</h3>
-    <p class="hint">Gemini پیش‌فرض است. سرویس‌های سازگار با OpenAI (OpenRouter، DeepSeek، Groq، Ollama…) یا Anthropic را هم می‌توانید اضافه کنید و یکی را فعال کنید.</p>
+    <p class="hint">کلید API را وارد کنید و «دریافت مدل‌ها» را بزنید. روی هر کارت بزنید تا تست شود؛ از بین مدل‌های سالم یکی را انتخاب کنید. تنظیمات بین سرور و گوشی همگام می‌شود.</p>
     <div id="providers"></div>
     <div class="row">
-      <button id="add-provider">➕ سرویس جدید</button>
+      <button id="add-provider">➕ سرویس دیگر (OpenAI / Anthropic سازگار)</button>
       <button id="save-settings" class="primary">ذخیره</button>
-      <button id="test-ai">🧪 تست</button>
     </div>
     <p id="settings-msg" class="hint"></p>
 
@@ -51,30 +65,25 @@
       <div class="row"><button id="regen-token" class="danger">ساخت توکن جدید (توکن قبلی باطل می‌شود)</button></div>
     </div>
 
-    <div id="server-app" hidden>
-      <h3>🖥️ اتصال به سرور</h3>
-      <div id="server-off">
-        <p class="hint">توکن را از پنل وب سرور (تنظیمات › اتصال اپ اندروید) کپی کنید و اینجا بچسبانید.</p>
-        <div class="row"><input id="paste-token" dir="ltr" placeholder="sn1.…" /><button id="connect" class="primary">اتصال</button></div>
-      </div>
-      <div id="server-on" hidden>
-        <p>وصل به: <b id="server-url" dir="ltr"></b><br /><span class="hint">آخرین همگام‌سازی: <span id="last-sync">—</span></span></p>
-        <div class="sync-grid">
-          <button data-sync="merge" class="primary">🔄 همگام‌سازی دوطرفه<br /><small>جدیدترین نسخه هر یادداشت می‌ماند</small></button>
-          <button data-sync="pull">⬇️ سرور ← گوشی<br /><small>اطلاعات گوشی با سرور جایگزین می‌شود</small></button>
-          <button data-sync="push">⬆️ گوشی ← سرور<br /><small>اطلاعات سرور با گوشی جایگزین می‌شود</small></button>
-        </div>
-        <label class="check"><input type="checkbox" id="auto-sync" /> همگام‌سازی دوطرفه خودکار هنگام باز کردن اپ و بعد از هر ثبت</label>
-        <div class="row"><button id="disconnect" class="danger">قطع اتصال</button></div>
-      </div>
+    <h3>💾 پشتیبان و بازیابی</h3>
+    <div class="box">
+      <b>گرفتن پشتیبان</b>
+      <label class="check"><input type="checkbox" id="exp-keys" /> کلیدهای API هم داخل فایل باشد (فایل را جای امن نگه دارید)</label>
+      <div class="row"><button id="export" class="primary">⬇️ دانلود فایل پشتیبان</button></div>
     </div>
-
-    <h3>💾 پشتیبان</h3>
-    <div class="row">
-      <button id="export">⬇️ خروجی JSON</button>
-      <label class="btn">⬆️ ورود JSON <input type="file" id="import" accept="application/json" hidden /></label>
-      <button id="logout" hidden>خروج از حساب</button>
+    <div class="box">
+      <b>بازیابی از فایل</b>
+      <label class="check"><input type="radio" name="imp-mode" value="merge" checked /> ادغام: یادداشت‌های فایل اضافه می‌شوند، از هر یادداشت جدیدترین نسخه می‌ماند</label>
+      <label class="check"><input type="radio" name="imp-mode" value="replace" /> جایگزینی کامل: فقط محتوای فایل می‌ماند (روی دستگاه‌های همگام هم)</label>
+      <label class="check"><input type="checkbox" id="imp-ai" /> تنظیمات هوش مصنوعی هم از فایل خوانده شود</label>
+      <div class="row"><label class="btn primary">⬆️ انتخاب فایل و بازیابی <input type="file" id="import" accept="application/json,.json" hidden /></label></div>
     </div>
+    <div id="export-fallback" hidden>
+      <p class="hint">ذخیره فایل ممکن نشد؛ متن زیر را کپی و جایی نگه دارید:</p>
+      <textarea id="export-text" rows="5" dir="ltr" readonly></textarea>
+      <div class="row"><button id="copy-export">کپی</button></div>
+    </div>
+    <div class="row"><button id="logout" hidden>خروج از حساب</button></div>
     <p class="hint" id="version"></p>
   </section>
 

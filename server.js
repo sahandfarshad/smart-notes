@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { classifyText, callProvider, newNote, mergeNotes, encodeSyncToken, UNCATEGORIZED, DEFAULT_PROVIDERS } from './public/core.js';
+import { classifyText, newNote, mergeNotes, listModels, testModel, encodeSyncToken, UNCATEGORIZED, DEFAULT_PROVIDERS } from './public/core.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT_INTERNAL || process.env.PORT || 8080);
@@ -41,6 +41,7 @@ if (!getSetting('providers')) {
   setSetting('providers', [{ id: 'gemini', name: 'Gemini', kind: 'gemini', ...DEFAULT_PROVIDERS.gemini, apiKey: process.env.GEMINI_API_KEY || '' }]);
   setSetting('activeProvider', 'gemini');
 }
+if (!getSetting('aiUpdatedAt')) setSetting('aiUpdatedAt', new Date(0).toISOString());
 if (!getSetting('syncKey')) setSetting('syncKey', crypto.randomBytes(24).toString('hex'));
 
 const toRow = n => db.prepare('SELECT * FROM notes WHERE uid=?').get(n);
@@ -61,6 +62,19 @@ function save(n) {
 }
 const allNotes = (withDeleted = false) => db.prepare(`SELECT * FROM notes ${withDeleted ? '' : 'WHERE deleted=0'} ORDER BY id DESC`).all().map(parse);
 const activeProvider = () => getSetting('providers', []).find(p => p.id === getSetting('activeProvider'));
+const KINDS = ['gemini', 'openai', 'anthropic'];
+const cleanProvider = (p, prev) => ({ id: s(p.id) || crypto.randomUUID(), name: s(p.name) || 'AI', kind: KINDS.includes(p.kind) ? p.kind : 'openai',
+  baseUrl: s(p.baseUrl), model: s(p.model), apiKey: p.apiKey ? s(p.apiKey) : (prev?.apiKey || '') });
+/** AI settings incl. keys (only for the web session owner or the sync token holder) */
+const getAi = () => ({ providers: getSetting('providers', []), activeProvider: getSetting('activeProvider'), updated_at: getSetting('aiUpdatedAt') });
+function setAi(ai, keepOldKeys = false) {
+  const old = getSetting('providers', []);
+  setSetting('providers', (ai.providers || []).map(p => cleanProvider(p, keepOldKeys ? old.find(o => o.id === p.id) : null)));
+  if (ai.activeProvider !== undefined) setSetting('activeProvider', s(ai.activeProvider));
+  setSetting('aiUpdatedAt', s(ai.updated_at) || new Date().toISOString());
+}
+/** provider sent by the UI: if its key field is empty, use the saved key */
+const withSavedKey = p => ({ ...cleanProvider(p || {}, getSetting('providers', []).find(o => o.id === p?.id)) });
 
 async function classify(uid) {
   const n = parse(toRow(uid)); if (!n) return;
@@ -83,7 +97,7 @@ app.use('/api', (req, res, next) => { // CORS for the Android app
 
 const sessionToken = () => crypto.createHash('sha256').update(`smart-notes:${APP_USER}:${APP_PASSWORD}`).digest('hex');
 const same = (a, b) => { const h = x => crypto.createHash('sha256').update(String(x)).digest(); return crypto.timingSafeEqual(h(a), h(b)); };
-app.get('/api/info', (req, res) => res.json({ app: 'smart-notes', version: 2, auth: !!APP_PASSWORD }));
+app.get('/api/info', (req, res) => res.json({ app: 'smart-notes', version: 3, auth: !!APP_PASSWORD }));
 app.post('/api/login', (req, res) => {
   if (!APP_PASSWORD) return res.json({ token: '' });
   if (same(s(req.body?.username), APP_USER) && same(s(req.body?.password), APP_PASSWORD)) return res.json({ token: sessionToken() });
@@ -115,16 +129,17 @@ app.delete('/api/notes/:uid', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---- sync (used by the Android app with the sync token)
-app.get('/api/sync', (req, res) => res.json({ notes: allNotes(true) }));
+// ---- sync (Android app, with the sync token): notes by uid, newest updated_at wins (deletes are tombstones), AI settings newest wins
+app.get('/api/sync', (req, res) => res.json({ notes: allNotes(true), ai: getAi(), server_time: new Date().toISOString() }));
 app.post('/api/sync', (req, res) => {
-  const incoming = Array.isArray(req.body?.notes) ? req.body.notes : [];
-  const mode = req.body?.mode === 'replace' ? 'replace' : 'merge';
+  const incoming = Array.isArray(req.body?.notes) ? req.body.notes.filter(n => n && n.uid) : [];
   db.transaction(() => {
-    if (mode === 'replace') { db.exec('DELETE FROM notes'); incoming.forEach(save); }
-    else mergeNotes(allNotes(true), incoming).forEach(save);
+    const cur = new Map(allNotes(true).map(n => [n.uid, n]));
+    for (const n of incoming) { const c = cur.get(n.uid); if (!c || s(n.updated_at) > s(c.updated_at)) save(n); }
+    const ai = req.body?.ai;
+    if (ai && Array.isArray(ai.providers) && s(ai.updated_at) > s(getAi().updated_at)) setAi(ai);
   })();
-  res.json({ ok: true, count: allNotes().length });
+  res.json({ notes: allNotes(true), ai: getAi(), server_time: new Date().toISOString() });
 });
 app.get('/api/sync/token', (req, res) => {
   if (req.viaSync) return res.status(403).json({ error: 'forbidden' });
@@ -143,27 +158,34 @@ app.get('/api/settings', (req, res) => res.json({
   providers: getSetting('providers', []).map(p => ({ ...p, apiKey: '', apiKeyMasked: mask(p.apiKey), hasKey: !!p.apiKey })),
 }));
 app.put('/api/settings', (req, res) => {
-  if (req.viaSync) return res.status(403).json({ error: 'forbidden' });
-  const old = getSetting('providers', []);
-  const providers = (Array.isArray(req.body?.providers) ? req.body.providers : old).map(p => {
-    const prev = old.find(o => o.id === p.id);
-    return { id: s(p.id) || crypto.randomUUID(), name: s(p.name) || 'AI', kind: ['gemini', 'openai', 'anthropic'].includes(p.kind) ? p.kind : 'openai',
-      baseUrl: s(p.baseUrl), model: s(p.model), apiKey: p.apiKey ? s(p.apiKey) : (prev?.apiKey || '') };
-  });
-  setSetting('providers', providers);
-  if (req.body?.activeProvider) setSetting('activeProvider', s(req.body.activeProvider));
+  const b = req.body || {};
+  setAi({ providers: Array.isArray(b.providers) ? b.providers : getSetting('providers', []), activeProvider: b.activeProvider, updated_at: new Date().toISOString() }, true);
   res.json({ ok: true });
 });
-app.post('/api/settings/test', async (req, res) => {
-  try { res.json({ ok: true, reply: (await callProvider(activeProvider(), 'Reply with JSON {"ok":true}', 'ping')).slice(0, 200) }); }
-  catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
+app.post('/api/ai/models', async (req, res) => {
+  try { res.json({ models: await listModels(withSavedKey(req.body?.provider)) }); }
+  catch (e) { res.status(400).json({ error: String(e.message || e) }); }
 });
+app.post('/api/ai/test', async (req, res) => res.json(await testModel(withSavedKey(req.body?.provider), s(req.body?.model))));
 
-// ---- backup
-app.get('/api/export', (req, res) => res.json({ version: 2, exported_at: new Date().toISOString(), notes: allNotes(true) }));
+// ---- backup: notes (+ AI settings). import mode: merge (newest wins) or replace (everything else is deleted, also on synced phones)
+app.get('/api/export', (req, res) => {
+  const ai = getAi();
+  if (req.query.keys !== '1') ai.providers = ai.providers.map(p => ({ ...p, apiKey: '' }));
+  res.json({ app: 'smart-notes', version: 3, exported_at: new Date().toISOString(), notes: allNotes(true), ai });
+});
 app.post('/api/import', (req, res) => {
-  const notes = Array.isArray(req.body?.notes) ? req.body.notes : [];
-  db.transaction(() => mergeNotes(allNotes(true), notes.map(n => ({ ...n, uid: n.uid || crypto.randomUUID() }))).forEach(save))();
+  const b = req.body || {};
+  const notes = (Array.isArray(b.notes) ? b.notes : []).filter(Boolean).map(n => ({ ...n, uid: n.uid || crypto.randomUUID() }));
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    if (b.mode === 'replace') {
+      const keep = new Set(notes.map(n => n.uid));
+      for (const n of allNotes(true)) if (!keep.has(n.uid) && !n.deleted) save({ ...n, deleted: 1, updated_at: now });
+      notes.forEach(n => save({ ...n, updated_at: now }));
+    } else mergeNotes(allNotes(true), notes).forEach(save);
+    if (b.importAi && b.ai && Array.isArray(b.ai.providers)) setAi({ ...b.ai, updated_at: now }, true);
+  })();
   res.json({ imported: notes.length });
 });
 

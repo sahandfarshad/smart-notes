@@ -1,7 +1,7 @@
 // Data layer. Same UI talks to either:
 //  - RemoteStore: the web panel served by your server (/api)
 //  - LocalStore : the Android app (offline, IndexedDB on the phone, AI called from the phone, optional sync with the server)
-import { classifyText, callProvider, newNote, mergeNotes, decodeSyncToken, DEFAULT_PROVIDERS } from './core.js';
+import { classifyText, listModels, testModel, uuid, newNote, mergeNotes, decodeSyncToken, DEFAULT_PROVIDERS } from './core.js';
 
 // ---------------------------------------------------------------- remote (web panel)
 export class RemoteStore {
@@ -30,9 +30,10 @@ export class RemoteStore {
   remove(uid) { return this.api('/notes/' + uid, { method: 'DELETE' }); }
   getSettings() { return this.api('/settings'); }
   saveSettings(s) { return this.api('/settings', { method: 'PUT', body: s }); }
-  testAi() { return this.api('/settings/test', { method: 'POST' }); }
-  exportAll() { return this.api('/export'); }
-  importAll(data) { return this.api('/import', { method: 'POST', body: data }); }
+  listModels(provider) { return this.api('/ai/models', { method: 'POST', body: { provider } }).then(r => r.models); }
+  testModel(provider, model) { return this.api('/ai/test', { method: 'POST', body: { provider, model } }); }
+  exportAll(keys) { return this.api('/export' + (keys ? '?keys=1' : '')); }
+  importAll(data, mode, importAi) { return this.api('/import', { method: 'POST', body: { ...data, mode, importAi } }); }
   syncToken() { return this.api('/sync/token'); }
   regenerateSyncToken() { return this.api('/sync/token/regenerate', { method: 'POST' }); }
 }
@@ -79,43 +80,87 @@ export class LocalStore {
     return done;
   }
 
+  async getAi() {
+    return {
+      providers: await this.kvGet('providers', [{ id: 'gemini', name: 'Gemini', kind: 'gemini', ...DEFAULT_PROVIDERS.gemini, apiKey: '' }]),
+      activeProvider: await this.kvGet('activeProvider', 'gemini'),
+      updated_at: await this.kvGet('aiUpdatedAt', new Date(0).toISOString()),
+    };
+  }
+  async setAi(ai) {
+    await this.kvSet('providers', (ai.providers || []).map(p => ({ id: p.id, name: p.name, kind: p.kind, baseUrl: p.baseUrl, model: p.model, apiKey: p.apiKey || '' })));
+    await this.kvSet('activeProvider', ai.activeProvider || '');
+    await this.kvSet('aiUpdatedAt', ai.updated_at || new Date().toISOString());
+  }
   async getSettings(withKeys = false) {
-    const providers = await this.kvGet('providers', [{ id: 'gemini', name: 'Gemini', kind: 'gemini', ...DEFAULT_PROVIDERS.gemini, apiKey: '' }]);
-    const activeProvider = await this.kvGet('activeProvider', 'gemini');
+    const { providers, activeProvider } = await this.getAi();
     if (withKeys) return { providers, activeProvider };
     return { activeProvider, auth: false, providers: providers.map(p => ({ ...p, apiKey: '', hasKey: !!p.apiKey, apiKeyMasked: p.apiKey ? p.apiKey.slice(0, 4) + '••••' + p.apiKey.slice(-4) : '' })) };
   }
   async saveSettings(st) {
-    const old = (await this.getSettings(true)).providers;
-    await this.kvSet('providers', st.providers.map(p => ({ id: p.id, name: p.name, kind: p.kind, baseUrl: p.baseUrl, model: p.model, apiKey: p.apiKey || old.find(o => o.id === p.id)?.apiKey || '' })));
-    if (st.activeProvider) await this.kvSet('activeProvider', st.activeProvider);
+    const old = (await this.getAi()).providers;
+    await this.setAi({ providers: st.providers.map(p => ({ ...p, apiKey: p.apiKey || old.find(o => o.id === p.id)?.apiKey || '' })),
+      activeProvider: st.activeProvider, updated_at: new Date().toISOString() });
     return { ok: true };
   }
-  async testAi() { return { ok: true, reply: (await callProvider(await this.provider(), 'Reply with JSON {"ok":true}', 'ping')).slice(0, 200) }; }
-  async exportAll() { return { version: 2, exported_at: new Date().toISOString(), notes: this.cache }; }
-  async importAll(data) { await this.replaceAll(mergeNotes(this.cache, data.notes || [])); return { imported: (data.notes || []).length }; }
+  async withKey(p) { const o = (await this.getAi()).providers.find(x => x.id === p.id); return { ...p, apiKey: p.apiKey || o?.apiKey || '' }; }
+  async listModels(p) { return listModels(await this.withKey(p)); }
+  async testModel(p, model) { return testModel(await this.withKey(p), model); }
+  async exportAll(keys) {
+    const ai = await this.getAi();
+    if (!keys) ai.providers = ai.providers.map(p => ({ ...p, apiKey: '' }));
+    return { app: 'smart-notes', version: 3, exported_at: new Date().toISOString(), notes: this.cache, ai };
+  }
+  async importAll(data, mode, importAi) {
+    const now = new Date().toISOString();
+    const incoming = (data.notes || []).filter(Boolean).map(n => ({ ...n, uid: n.uid || uuid() }));
+    if (mode === 'replace') {
+      const keep = new Set(incoming.map(n => n.uid));
+      const gone = this.cache.filter(n => !keep.has(n.uid)).map(n => ({ ...n, deleted: 1, updated_at: now }));
+      await this.replaceAll([...gone, ...incoming.map(n => ({ ...n, updated_at: now }))]);
+    } else await this.replaceAll(mergeNotes(this.cache, incoming));
+    if (importAi && data.ai?.providers) {
+      const old = (await this.getAi()).providers;
+      await this.setAi({ ...data.ai, providers: data.ai.providers.map(p => ({ ...p, apiKey: p.apiKey || old.find(o => o.id === p.id)?.apiKey || '' })), updated_at: now });
+    }
+    return { imported: incoming.length };
+  }
 
   // ---- server connection
   async server() { return this.kvGet('server', null); }
   async connect(token) {
     const { url, key } = decodeSyncToken(token);
-    const r = await fetch(url + '/api/info'); if (!r.ok) throw new Error('سرور در دسترس نیست');
-    const t = await fetch(url + '/api/sync', { headers: { Authorization: 'Bearer ' + key } });
-    if (!t.ok) throw new Error('توکن پذیرفته نشد');
-    await this.kvSet('server', { url, key, lastSync: null }); return { url };
+    let r;
+    try { r = await fetch(url + '/api/sync', { headers: { Authorization: 'Bearer ' + key } }); } catch { throw new Error('سرور در دسترس نیست: ' + url); }
+    if (r.status === 401) throw new Error('توکن پذیرفته نشد');
+    if (!r.ok) throw new Error('سرور در دسترس نیست');
+    const remote = await r.json();
+    // first connection: AI settings come from the server, notes of both sides are merged
+    if (remote.ai?.providers) await this.setAi(remote.ai);
+    await this.replaceAll(mergeNotes(this.cache, remote.notes || []));
+    await this.kvSet('server', { url, key, lastSync: null });
+    return { url, ...(await this.sync()) };
   }
   async disconnect() { await this.kvSet('server', null); }
-  /** mode: 'pull' (server -> phone), 'push' (phone -> server), 'merge' (two-way, newest wins) */
-  async sync(mode) {
-    const srv = await this.server(); if (!srv) throw new Error('به سروری وصل نیستید');
-    const h = { Authorization: 'Bearer ' + srv.key, 'Content-Type': 'application/json' };
-    const post = async notes => { const r = await fetch(srv.url + '/api/sync', { method: 'POST', headers: h, body: JSON.stringify({ mode: 'replace', notes }) }); if (!r.ok) throw new Error('ارسال به سرور ناموفق بود'); };
-    let remote = [];
-    if (mode !== 'push') { const r = await fetch(srv.url + '/api/sync', { headers: h }); if (!r.ok) throw new Error('دریافت از سرور ناموفق بود'); remote = (await r.json()).notes || []; }
-    if (mode === 'pull') await this.replaceAll(remote);
-    else if (mode === 'push') await post(this.cache);
-    else { const merged = mergeNotes(this.cache, remote); await post(merged); await this.replaceAll(merged); }
-    srv.lastSync = new Date().toISOString(); await this.kvSet('server', srv);
-    return { count: this.cache.filter(n => !n.deleted).length };
+  /** two-way sync: every note by uid, newest version wins (deletes too); AI settings: newest wins */
+  async sync() {
+    if (this.syncing) return this.syncing;
+    this.syncing = (async () => {
+      const srv = await this.server(); if (!srv) throw new Error('به سروری وصل نیستید');
+      let r;
+      try {
+        r = await fetch(srv.url + '/api/sync', { method: 'POST', headers: { Authorization: 'Bearer ' + srv.key, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notes: this.cache, ai: await this.getAi() }) });
+      } catch { throw new Error('سرور در دسترس نیست'); }
+      if (r.status === 401) throw new Error('توکن باطل شده؛ توکن جدید را وارد کنید');
+      if (!r.ok) throw new Error('همگام‌سازی ناموفق بود');
+      const remote = await r.json();
+      await this.replaceAll(mergeNotes(this.cache, remote.notes || []));
+      const mine = await this.getAi();
+      if (remote.ai?.providers && String(remote.ai.updated_at) > String(mine.updated_at)) await this.setAi(remote.ai);
+      srv.lastSync = new Date().toISOString(); await this.kvSet('server', srv);
+      return { count: this.cache.filter(n => !n.deleted).length };
+    })();
+    try { return await this.syncing; } finally { this.syncing = null; }
   }
 }

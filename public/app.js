@@ -9,7 +9,7 @@ const hl = (s, q) => highlight(esc(s), q).replace(/(https?:\/\/[^\s<]+)/g, '<a h
 const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 2600); };
 const fmtDate = s => (s ? String(s).slice(0, 10) : '');
 
-const isApp = !!window.Capacitor?.isNativePlatform?.();
+const isApp = !!window.Capacitor?.isNativePlatform?.() || (location.hostname === 'localhost' && location.protocol === 'https:' && !location.port);
 const store = isApp ? new LocalStore() : new RemoteStore();
 let notes = [];
 let page = 'home';
@@ -130,11 +130,12 @@ $('#editor').addEventListener('close', async () => {
 
 // ------------------------------------------------------------ settings
 let settings = { providers: [] };
+const modelState = {}; // providerId -> { list, filter, onlyOk, tests: { model: {status, ms, error} } }
 async function loadSettings() {
   try { settings = await store.getSettings(); } catch { return; }
   renderProviders();
   $('#logout').hidden = !settings.auth;
-  $('#version').textContent = (isApp ? 'اپ اندروید' : 'پنل وب') + ' · Smart Notes v2';
+  $('#version').textContent = (isApp ? 'اپ اندروید' : 'پنل وب') + ' · Smart Notes v3';
   if (!isApp) {
     $('#server-web').hidden = false;
     store.syncToken().then(r => $('#sync-token').value = r.token).catch(() => {});
@@ -143,71 +144,173 @@ async function loadSettings() {
     const srv = await store.server();
     $('#server-off').hidden = !!srv; $('#server-on').hidden = !srv;
     if (srv) { $('#server-url').textContent = srv.url; $('#last-sync').textContent = srv.lastSync ? new Date(srv.lastSync).toLocaleString('fa-IR') : '—'; }
-    $('#auto-sync').checked = await store.kvGet('autoSync', false);
   }
 }
 const KIND_LABEL = { gemini: 'Gemini', openai: 'OpenAI-compatible', anthropic: 'Anthropic-compatible' };
+const msg = t => $('#settings-msg').textContent = t;
+async function persist(note) {
+  try { await store.saveSettings(settings); settings = await store.getSettings(); if (note) msg(note); autoSync(); return true; }
+  catch (e) { msg('❌ ' + e.message); return false; }
+}
+function modelCards(p) {
+  const st = modelState[p.id];
+  if (!st) return '';
+  if (st.loading) return '<p class="hint">⏳ در حال دریافت فهرست مدل‌ها…</p>';
+  if (st.error) return `<p class="hint" style="color:var(--danger)">❌ ${esc(st.error)}</p>`;
+  const f = (st.filter || '').toLowerCase();
+  const list = st.list.filter(m => (!f || (m.id + ' ' + m.name).toLowerCase().includes(f)) && (!st.onlyOk || st.tests[m.id]?.status === 'ok'));
+  const okCount = Object.values(st.tests).filter(t => t.status === 'ok').length;
+  return `<div class="models-tools">
+      <input type="search" data-mfilter placeholder="فیلتر مدل‌ها…" value="${esc(st.filter || '')}" dir="ltr" />
+      <button data-testall>🧪 تست همه</button>
+      <label class="check" style="margin:0"><input type="checkbox" data-onlyok ${st.onlyOk ? 'checked' : ''} /> فقط سالم‌ها (${okCount})</label>
+    </div>
+    <p class="hint">${st.list.length} مدل · روی هر کارت بزنید تا تست شود</p>
+    <div class="models">${list.map(m => {
+      const t = st.tests[m.id] || {}; const sel = p.model === m.id;
+      const status = t.status === 'testing' ? '⏳ در حال تست…' : t.status === 'ok' ? `✅ کار می‌کند · ${(t.ms / 1000).toFixed(1)} ثانیه` : t.status === 'bad' ? '❌ ' + esc(t.error) : sel ? '⭐ انتخاب فعلی' : 'برای تست بزنید';
+      return `<div class="mcard ${t.status === 'ok' ? 'ok' : t.status === 'bad' ? 'bad' : ''} ${sel ? 'selected' : ''}" data-model="${esc(m.id)}">
+        <div class="mid">${esc(m.id)}</div>${m.name && m.name !== m.id ? `<div class="mname">${esc(m.name)}</div>` : ''}
+        <div class="mst">${status}</div>
+        ${t.status === 'ok' && !sel ? '<button class="primary" data-pick>✔ انتخاب این مدل</button>' : sel ? '<div class="mst">⭐ مدل فعال این سرویس</div>' : ''}
+      </div>`;
+    }).join('')}</div>`;
+}
 function renderProviders() {
   $('#providers').innerHTML = settings.providers.map((p, i) => `<div class="provider" data-i="${i}">
-    <input type="radio" name="active" value="${esc(p.id)}" ${p.id === settings.activeProvider ? 'checked' : ''} title="فعال" style="width:auto" />
-    <input data-k="name" value="${esc(p.name)}" placeholder="نام" />
-    <select data-k="kind">${Object.keys(KIND_LABEL).map(k => `<option value="${k}" ${p.kind === k ? 'selected' : ''}>${KIND_LABEL[k]}</option>`).join('')}</select>
-    <button data-del="${i}" class="danger">✕</button>
-    <input class="full" data-k="baseUrl" value="${esc(p.baseUrl)}" placeholder="Base URL" dir="ltr" />
-    <input class="full" data-k="model" value="${esc(p.model)}" placeholder="Model" dir="ltr" />
-    <input class="full" data-k="apiKey" type="password" dir="ltr" placeholder="${p.hasKey ? 'کلید ذخیره شده ' + esc(p.apiKeyMasked) + ' (برای تغییر، جدید بنویسید)' : 'API Key'}" />
+    <div class="prov-head">
+      <input type="radio" name="active" value="${esc(p.id)}" ${p.id === settings.activeProvider ? 'checked' : ''} title="سرویس فعال" />
+      <input data-k="name" value="${esc(p.name)}" placeholder="نام" />
+      <select data-k="kind">${Object.keys(KIND_LABEL).map(k => `<option value="${k}" ${p.kind === k ? 'selected' : ''}>${KIND_LABEL[k]}</option>`).join('')}</select>
+      <button data-del class="danger" title="حذف">✕</button>
+    </div>
+    <input data-k="apiKey" type="password" dir="ltr" autocomplete="off" placeholder="${p.hasKey ? 'کلید ذخیره شده ' + esc(p.apiKeyMasked) + ' (برای تغییر، کلید جدید بنویسید)' : 'API Key'}" value="${esc(p.apiKey || '')}" />
+    <details><summary>تنظیمات پیشرفته (آدرس سرویس)</summary><input data-k="baseUrl" value="${esc(p.baseUrl)}" placeholder="Base URL" dir="ltr" /></details>
+    <div class="cur-model">مدل: <b dir="ltr">${esc(p.model || 'انتخاب نشده')}</b></div>
+    <div class="row" style="margin:4px 0"><button data-models class="primary">🔎 دریافت مدل‌ها</button></div>
+    <div data-cards>${modelCards(p)}</div>
   </div>`).join('');
   $$('#providers .provider').forEach(el => {
     const p = settings.providers[el.dataset.i];
     el.querySelectorAll('[data-k]').forEach(inp => inp.oninput = () => {
       p[inp.dataset.k] = inp.value;
-      if (inp.dataset.k === 'kind') { Object.assign(p, DEFAULT_PROVIDERS[inp.value]); renderProviders(); }
+      if (inp.dataset.k === 'kind') { Object.assign(p, DEFAULT_PROVIDERS[inp.value], { model: '' }); delete modelState[p.id]; renderProviders(); }
     });
-    el.querySelector('[name=active]').onchange = e => settings.activeProvider = e.target.value;
+    el.querySelector('[name=active]').onchange = e => { settings.activeProvider = e.target.value; persist('✅ سرویس فعال تغییر کرد'); };
+    el.querySelector('[data-del]').onclick = () => { if (!confirm('این سرویس حذف شود؟')) return; settings.providers.splice(+el.dataset.i, 1); persist('حذف شد').then(renderProviders); };
+    el.querySelector('[data-models]').onclick = () => fetchModels(p);
+    bindCards(el, p);
   });
-  $$('[data-del]').forEach(b => b.onclick = () => { settings.providers.splice(+b.dataset.del, 1); renderProviders(); });
 }
-$('#add-provider').onclick = () => { settings.providers.push({ id: uuid(), name: 'سرویس جدید', kind: 'openai', ...DEFAULT_PROVIDERS.openai, apiKey: '' }); renderProviders(); };
-$('#save-settings').onclick = async () => { try { await store.saveSettings(settings); $('#settings-msg').textContent = '✅ ذخیره شد'; loadSettings(); } catch (e) { $('#settings-msg').textContent = '❌ ' + e.message; } };
-$('#test-ai').onclick = async () => {
-  $('#settings-msg').textContent = '⏳ …';
-  try { await store.saveSettings(settings); const r = await store.testAi(); $('#settings-msg').textContent = '✅ وصل است: ' + r.reply; }
-  catch (e) { $('#settings-msg').textContent = '❌ ' + e.message; }
-};
+function rerenderCards(p) {
+  const el = $$('#providers .provider').find(x => settings.providers[x.dataset.i]?.id === p.id); if (!el) return;
+  const box = el.querySelector('[data-cards]'); const f = box.querySelector('[data-mfilter]'); const focus = f && document.activeElement === f;
+  box.innerHTML = modelCards(p); el.querySelector('.cur-model b').textContent = p.model || 'انتخاب نشده';
+  bindCards(el, p);
+  if (focus) { const nf = box.querySelector('[data-mfilter]'); nf.focus(); nf.setSelectionRange(nf.value.length, nf.value.length); }
+}
+function bindCards(el, p) {
+  const st = modelState[p.id]; if (!st || !st.list) return;
+  const f = el.querySelector('[data-mfilter]'); if (f) f.oninput = () => { st.filter = f.value; rerenderCards(p); };
+  const o = el.querySelector('[data-onlyok]'); if (o) o.onchange = () => { st.onlyOk = o.checked; rerenderCards(p); };
+  const ta = el.querySelector('[data-testall]'); if (ta) ta.onclick = () => testAll(p);
+  el.querySelectorAll('.mcard').forEach(c => c.onclick = async e => {
+    const id = c.dataset.model;
+    if (e.target.matches('[data-pick]')) return pick(p, id);
+    if (st.tests[id]?.status === 'testing') return;
+    await testOne(p, id);
+  });
+}
+async function fetchModels(p) {
+  modelState[p.id] = { loading: true, tests: modelState[p.id]?.tests || {} }; rerenderCards(p);
+  try {
+    const list = await store.listModels({ ...p });
+    modelState[p.id] = { list, tests: modelState[p.id].tests, filter: '', onlyOk: false };
+    if (p.apiKey) await persist('✅ کلید ذخیره شد'); // key worked -> keep it
+    if (!list.length) modelState[p.id].error = 'مدلی پیدا نشد';
+  } catch (e) { modelState[p.id] = { error: e.message + (p.kind === 'gemini' && !isApp ? ' (اگر سرور در ایران است، گوگل ممکن است IP آن را مسدود کند)' : ''), tests: {} }; }
+  renderProviders();
+}
+async function testOne(p, id) {
+  const st = modelState[p.id]; st.tests[id] = { status: 'testing' }; rerenderCards(p);
+  try { const r = await store.testModel({ ...p }, id); st.tests[id] = r.ok ? { status: 'ok', ms: r.ms } : { status: 'bad', error: r.error }; }
+  catch (e) { st.tests[id] = { status: 'bad', error: e.message }; }
+  rerenderCards(p);
+}
+async function testAll(p) {
+  const st = modelState[p.id]; const f = (st.filter || '').toLowerCase();
+  const queue = st.list.filter(m => !f || (m.id + ' ' + m.name).toLowerCase().includes(f)).map(m => m.id).filter(id => st.tests[id]?.status !== 'testing');
+  const worker = async () => { while (queue.length) await testOne(p, queue.shift()); };
+  await Promise.all([worker(), worker(), worker()]);
+  msg(`✅ تست تمام شد: ${Object.values(st.tests).filter(t => t.status === 'ok').length} مدل سالم`);
+}
+async function pick(p, id) {
+  p.model = id; settings.activeProvider = settings.activeProvider || p.id;
+  if (await persist(`✅ مدل ${id} انتخاب و ذخیره شد`)) { const keep = modelState[p.id]; settings.providers.forEach(x => { if (x.id === p.id) x.model = id; }); modelState[p.id] = keep; renderProviders(); }
+}
+$('#add-provider').onclick = () => { settings.providers.push({ id: uuid(), name: 'سرویس جدید', kind: 'openai', ...DEFAULT_PROVIDERS.openai, model: '', apiKey: '' }); renderProviders(); };
+$('#save-settings').onclick = () => persist('✅ ذخیره شد').then(ok => ok && renderProviders());
+
 // web: sync token
 $('#copy-token').onclick = () => { $('#sync-token').select(); navigator.clipboard.writeText($('#sync-token').value).then(() => toast('کپی شد'), () => document.execCommand('copy')); };
 $('#regen-token').onclick = async () => { if (!confirm('توکن قبلی باطل شود؟ اپ‌های متصل باید دوباره وصل شوند.')) return; await store.regenerateSyncToken(); loadSettings(); toast('توکن جدید ساخته شد'); };
 // app: server connection
+$('#paste-clip').onclick = async () => { try { $('#paste-token').value = (await navigator.clipboard.readText()).trim(); } catch { toast('با نگه داشتن انگشت روی کادر، Paste را بزنید'); $('#paste-token').focus(); } };
 $('#connect').onclick = async () => {
-  try { const r = await store.connect($('#paste-token').value); toast('وصل شد: ' + r.url); $('#paste-token').value = ''; loadSettings(); }
-  catch (e) { toast('❌ ' + e.message); }
+  const b = $('#connect'); b.disabled = true; b.textContent = '⏳';
+  try { const r = await store.connect($('#paste-token').value.replace(/\s+/g, '')); toast(`✅ وصل شد · ${r.count} یادداشت`); $('#paste-token').value = ''; await reload(); loadSettings(); updateBadge(); }
+  catch (e) { toast('❌ ' + e.message); } finally { b.disabled = false; b.textContent = 'اتصال'; }
 };
+$('#go-connect').onclick = () => { go('settings'); setTimeout(() => $('#paste-token').focus(), 300); };
 $('#disconnect').onclick = async () => { if (confirm('اتصال قطع شود؟ یادداشت‌های گوشی می‌مانند.')) { await store.disconnect(); loadSettings(); updateBadge(); } };
-$$('[data-sync]').forEach(b => b.onclick = async () => {
-  const mode = b.dataset.sync;
-  if (mode !== 'merge' && !confirm(mode === 'pull' ? 'همه اطلاعات گوشی با سرور جایگزین شود؟' : 'همه اطلاعات سرور با گوشی جایگزین شود؟')) return;
-  b.disabled = true;
-  try { const r = await store.sync(mode); toast(`✅ همگام شد (${r.count} یادداشت)`); await reload(); loadSettings(); updateBadge(); }
-  catch (e) { toast('❌ ' + e.message); } finally { b.disabled = false; }
-});
-$('#auto-sync').onchange = e => store.kvSet('autoSync', e.target.checked);
+$('#sync-now').onclick = async () => {
+  const b = $('#sync-now'); b.disabled = true;
+  try { const r = await store.sync(); toast(`✅ همگام شد (${r.count} یادداشت)`); await reload(); loadSettings(); updateBadge(); }
+  catch (e) { toast('❌ ' + e.message); updateBadge(true); } finally { b.disabled = false; }
+};
 async function autoSync() {
-  if (!isApp || !(await store.server()) || !(await store.kvGet('autoSync', false))) return;
-  try { await store.sync('merge'); notes = (await store.all()).sort(byDate); render(); updateBadge(); } catch { updateBadge(true); }
+  if (!isApp || !(await store.server())) return;
+  try {
+    await store.sync(); notes = (await store.all()).sort(byDate); render(); updateBadge();
+    if (page === 'settings' && !document.querySelector('#providers :focus')) { const keep = JSON.stringify(settings); const fresh = await store.getSettings(); if (JSON.stringify(fresh) !== keep && !Object.keys(modelState).length) { settings = fresh; renderProviders(); } }
+  } catch { updateBadge(true); }
 }
 async function updateBadge(failed) {
   const b = $('#sync-badge');
-  if (!isApp) { b.hidden = true; return; }
+  if (!isApp) { b.hidden = true; $('#connect-banner').hidden = true; return; }
   const srv = await store.server();
-  b.hidden = false; b.textContent = !srv ? 'آفلاین' : failed ? 'همگام نشد' : 'متصل به سرور';
+  $('#connect-banner').hidden = !!srv;
+  b.hidden = false; b.textContent = !srv ? 'آفلاین' : failed ? '⚠️ همگام نشد' : '🟢 متصل به سرور';
 }
-// backup
+
+// ------------------------------------------------------------ backup & restore
+const native = (plugin, method, opts) => window.Capacitor?.Plugins?.[plugin]?.[method] ? window.Capacitor.Plugins[plugin][method](opts) : window.Capacitor.nativePromise(plugin, method, opts);
 $('#export').onclick = async () => {
-  const data = await store.exportAll(); const json = JSON.stringify(data, null, 2); const name = 'smart-notes-' + new Date().toISOString().slice(0, 10) + '.json';
-  if (isApp && navigator.share) { try { await navigator.share({ title: name, text: json }); return; } catch {} }
+  const data = await store.exportAll($('#exp-keys').checked); const json = JSON.stringify(data, null, 2);
+  const name = 'smart-notes-backup-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.json';
+  if (isApp) {
+    try {
+      const r = await native('Filesystem', 'writeFile', { path: name, data: json, directory: 'DOCUMENTS', encoding: 'utf8', recursive: true });
+      toast('✅ در پوشه Documents ذخیره شد');
+      try { await native('Share', 'share', { title: name, files: [r.uri] }); } catch {}
+      return;
+    } catch (e) { $('#export-fallback').hidden = false; $('#export-text').value = json; return; }
+  }
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' })); a.download = name; a.click();
+  toast('✅ فایل پشتیبان دانلود شد');
 };
-$('#import').onchange = async e => { const f = e.target.files[0]; if (!f) return; const r = await store.importAll(JSON.parse(await f.text())); toast(r.imported + ' یادداشت وارد شد'); reload(); };
+$('#copy-export').onclick = () => { $('#export-text').select(); navigator.clipboard.writeText($('#export-text').value).then(() => toast('کپی شد'), () => document.execCommand('copy')); };
+$('#import').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    if (!Array.isArray(data.notes)) throw new Error('فایل پشتیبان معتبر نیست');
+    const mode = document.querySelector('[name=imp-mode]:checked').value;
+    if (mode === 'replace' && !confirm(`همه یادداشت‌های فعلی پاک و ${data.notes.length} یادداشت فایل جایگزین شود؟`)) return;
+    const r = await store.importAll(data, mode, $('#imp-ai').checked);
+    toast(`✅ ${r.imported} یادداشت بازیابی شد`); await reload(); loadSettings(); autoSync();
+  } catch (err) { toast('❌ ' + err.message); }
+};
 $('#logout').onclick = () => { store.logout(); location.reload(); };
 
 // ------------------------------------------------------------ login (web panel)
@@ -226,5 +329,6 @@ $('#login-form').addEventListener('submit', async e => {
   } else if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
   await reload(); updateBadge();
   if (isApp) { autoSync(); store.retryPending().then(n => n && reload()); }
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && !isApp) reload(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) return; isApp ? autoSync() : reload(); });
+  setInterval(() => { if (document.hidden || $('#editor').open) return; isApp ? autoSync() : reload(); }, isApp ? 60000 : 30000);
 })();
