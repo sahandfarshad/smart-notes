@@ -102,8 +102,15 @@ services:
       - ./caddy_config:/config
 EOF
 }
+have_image() { docker image inspect "${IMAGE}" >/dev/null 2>&1; }
+ensure_image() { # never let "compose up" hit ghcr.io when the image is missing
+  have_image && return 0
+  info "App image not found on this server, downloading it..."
+  pull_image || { err "Could not get the app image (registry and GitHub Releases both failed)."; return 1; }
+}
 apply() { # recreate containers with the current .env
   setenv PUBLIC_URL "$(panel_url)"
+  ensure_image || return 1
   dc up -d --remove-orphans >/dev/null 2>&1 || dc up -d --remove-orphans
 }
 
@@ -120,8 +127,8 @@ pull_image() {
   warn "Registry is not reachable from this server. Downloading the image from GitHub Releases instead..."
   local f="/tmp/smart-notes-image.tar.gz"
   curl -fL --progress-bar -o "$f" "https://github.com/${REPO}/releases/download/server-image/smart-notes-image-${arch}.tar.gz" || { err "Download failed."; return 1; }
-  gunzip -c "$f" | docker load && rm -f "$f" && ok "Image loaded" && return 0
-  return 1
+  gunzip -c "$f" | docker load && rm -f "$f" && have_image && ok "Image loaded" && return 0
+  rm -f "$f"; return 1
 }
 
 install_docker() {
@@ -242,8 +249,8 @@ do_update() {
   info "Updating..."
   install_manager
   setenv IMAGE "$IMAGE"; write_compose
-  pull_image && apply && docker image prune -f >/dev/null 2>&1
-  ok "Updated to the latest version."
+  if pull_image && apply; then docker image prune -f >/dev/null 2>&1; ok "Updated to the latest version."
+  else err "Update failed. The old version (if any) is still installed."; sleep 3; fi
   exec "$BIN"
 }
 do_uninstall() {
