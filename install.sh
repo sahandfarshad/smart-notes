@@ -107,6 +107,23 @@ apply() { # recreate containers with the current .env
   dc up -d --remove-orphans >/dev/null 2>&1 || dc up -d --remove-orphans
 }
 
+pull_image() {
+  # 1) normal pull from GHCR
+  dc pull app >/dev/null 2>&1 && { ok "Image downloaded"; return 0; }
+  # 2) a stale "docker login ghcr.io" often causes "denied" -> retry anonymously
+  warn "Registry pull failed, retrying without saved ghcr.io login..."
+  docker logout ghcr.io >/dev/null 2>&1
+  dc pull app >/dev/null 2>&1 && { ok "Image downloaded"; return 0; }
+  # 3) fallback: download the image file from GitHub Releases
+  local arch
+  case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) err "Unsupported CPU: $(uname -m)"; return 1 ;; esac
+  warn "Registry is not reachable from this server. Downloading the image from GitHub Releases instead..."
+  local f="/tmp/smart-notes-image.tar.gz"
+  curl -fL --progress-bar -o "$f" "https://github.com/${REPO}/releases/download/server-image/smart-notes-image-${arch}.tar.gz" || { err "Download failed."; return 1; }
+  gunzip -c "$f" | docker load && rm -f "$f" && ok "Image loaded" && return 0
+  return 1
+}
+
 install_docker() {
   if command -v docker >/dev/null && docker compose version >/dev/null 2>&1; then ok "Docker is installed"; return; fi
   info "Installing Docker (this takes a minute)..."
@@ -133,7 +150,7 @@ do_install() {
   setenv SERVER_IP "$(server_ip)"
   write_compose
   info "Downloading the ready-made image (no compiling)..."
-  dc pull app || { err "Could not download the image."; exit 1; }
+  pull_image || { err "Could not download the image."; exit 1; }
   apply
   open_fw "$PORT_IN"
   install_manager
@@ -225,7 +242,7 @@ do_update() {
   info "Updating..."
   install_manager
   setenv IMAGE "$IMAGE"; write_compose
-  dc pull && apply && docker image prune -f >/dev/null 2>&1
+  pull_image && apply && docker image prune -f >/dev/null 2>&1
   ok "Updated to the latest version."
   exec "$BIN"
 }

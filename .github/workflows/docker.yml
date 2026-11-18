@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -38,3 +38,26 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Image files on GitHub Releases, for servers that cannot reach ghcr.io
+  image-files:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-qemu-action@v3
+      - name: Save images
+        run: |
+          for arch in amd64 arm64; do
+            docker pull --platform linux/$arch ghcr.io/${{ github.repository }}:latest
+            docker save ghcr.io/${{ github.repository }}:latest | gzip > smart-notes-image-$arch.tar.gz
+            docker rmi ghcr.io/${{ github.repository }}:latest
+          done
+          ls -lh *.tar.gz
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: server-image
+          name: Server image (latest)
+          make_latest: false
+          files: smart-notes-image-*.tar.gz
+          body: Docker image files used by install.sh when ghcr.io is not reachable from the server.
