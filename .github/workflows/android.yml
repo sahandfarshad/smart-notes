@@ -1,0 +1,65 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'public/**'
+      - 'capacitor.config.json'
+      - 'package.json'
+      - 'assets/**'
+      - 'android-signing/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+
+      - name: Create Android project
+        run: |
+          npx cap add android
+          sed -i 's|<application|<application android:usesCleartextTraffic="true"|' android/app/src/main/AndroidManifest.xml
+          sed -i "s|versionCode 1|versionCode ${{ github.run_number }}|; s|versionName \"1.0\"|versionName \"2.0.${{ github.run_number }}\"|" android/app/build.gradle
+
+      - name: App icon
+        continue-on-error: true
+        run: npx --yes @capacitor/assets@3 generate --android --iconBackgroundColor '#0ea5e9' --iconBackgroundColorDark '#0ea5e9' --splashBackgroundColor '#0f172a' --splashBackgroundColorDark '#0f172a'
+
+      - run: npx cap sync android
+
+      - name: Build APK (fixed signing key so updates install over the old version)
+        run: |
+          mkdir -p ~/.android && cp android-signing/debug.keystore ~/.android/debug.keystore
+          cd android && chmod +x gradlew && ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../smart-notes.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smart-notes-apk
+          path: smart-notes.apk
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-v2.0.${{ github.run_number }}
+          name: Android v2.0.${{ github.run_number }}
+          make_latest: true
+          files: smart-notes.apk
+          body: |
+            Smart Notes Android app.
+            Download smart-notes.apk on your phone and install it (allow "install unknown apps").
+            Direct link to the latest version: https://github.com/${{ github.repository }}/releases/latest/download/smart-notes.apk

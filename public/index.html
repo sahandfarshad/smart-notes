@@ -3,79 +3,92 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#111827" />
+  <meta name="theme-color" content="#0f172a" />
   <title>دفترچه هوشمند</title>
-  <link rel="manifest" href="/manifest.json" />
-  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-  <link rel="apple-touch-icon" href="/icon.svg" />
-  <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet" />
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header>
-    <h1>📒 دفترچه هوشمند</h1>
-    <input id="search" type="search" placeholder="جستجو… (فارسی یا English)" autocomplete="off" />
-  </header>
+  <!-- PAGE 1: add + instant search -->
+  <section id="page-home" class="page active">
+    <div class="brand">📒 دفترچه هوشمند <span id="sync-badge" class="badge" hidden></span></div>
+    <div class="composer">
+      <textarea id="raw" rows="2" placeholder="چی رو ثبت کنم؟ مثلاً: روغن ماشین عوض شد، کیلومتر ۸۵۰۰۰"></textarea>
+      <button id="save" class="primary">ثبت</button>
+    </div>
+    <div class="searchbox"><span>🔍</span><input id="q1" type="search" placeholder="جستجو…" autocomplete="off" enterkeyhint="search" /></div>
+    <div id="count1" class="hint"></div>
+    <div id="results1" class="list"></div>
+  </section>
+
+  <!-- PAGE 2: search + table -->
+  <section id="page-table" class="page">
+    <div class="searchbox"><span>🔍</span><input id="q2" type="search" placeholder="جستجو در جدول…" autocomplete="off" /></div>
+    <div id="chips" class="chips"></div>
+    <div id="subchips" class="chips sub"></div>
+    <div id="count2" class="hint"></div>
+    <div class="tbl-wrap"><table id="table"></table></div>
+  </section>
+
+  <!-- PAGE 3: settings -->
+  <section id="page-settings" class="page">
+    <h3>🤖 هوش مصنوعی</h3>
+    <p class="hint">Gemini پیش‌فرض است. سرویس‌های سازگار با OpenAI (OpenRouter، DeepSeek، Groq، Ollama…) یا Anthropic را هم می‌توانید اضافه کنید و یکی را فعال کنید.</p>
+    <div id="providers"></div>
+    <div class="row">
+      <button id="add-provider">➕ سرویس جدید</button>
+      <button id="save-settings" class="primary">ذخیره</button>
+      <button id="test-ai">🧪 تست</button>
+    </div>
+    <p id="settings-msg" class="hint"></p>
+
+    <div id="server-web" hidden>
+      <h3>📱 اتصال اپ اندروید</h3>
+      <p class="hint">این توکن را کپی کنید و در اپ اندروید (تنظیمات › اتصال به سرور) بچسبانید.</p>
+      <div class="row"><input id="sync-token" readonly dir="ltr" /><button id="copy-token">کپی</button></div>
+      <div class="row"><button id="regen-token" class="danger">ساخت توکن جدید (توکن قبلی باطل می‌شود)</button></div>
+    </div>
+
+    <div id="server-app" hidden>
+      <h3>🖥️ اتصال به سرور</h3>
+      <div id="server-off">
+        <p class="hint">توکن را از پنل وب سرور (تنظیمات › اتصال اپ اندروید) کپی کنید و اینجا بچسبانید.</p>
+        <div class="row"><input id="paste-token" dir="ltr" placeholder="sn1.…" /><button id="connect" class="primary">اتصال</button></div>
+      </div>
+      <div id="server-on" hidden>
+        <p>وصل به: <b id="server-url" dir="ltr"></b><br /><span class="hint">آخرین همگام‌سازی: <span id="last-sync">—</span></span></p>
+        <div class="sync-grid">
+          <button data-sync="merge" class="primary">🔄 همگام‌سازی دوطرفه<br /><small>جدیدترین نسخه هر یادداشت می‌ماند</small></button>
+          <button data-sync="pull">⬇️ سرور ← گوشی<br /><small>اطلاعات گوشی با سرور جایگزین می‌شود</small></button>
+          <button data-sync="push">⬆️ گوشی ← سرور<br /><small>اطلاعات سرور با گوشی جایگزین می‌شود</small></button>
+        </div>
+        <label class="check"><input type="checkbox" id="auto-sync" /> همگام‌سازی دوطرفه خودکار هنگام باز کردن اپ و بعد از هر ثبت</label>
+        <div class="row"><button id="disconnect" class="danger">قطع اتصال</button></div>
+      </div>
+    </div>
+
+    <h3>💾 پشتیبان</h3>
+    <div class="row">
+      <button id="export">⬇️ خروجی JSON</button>
+      <label class="btn">⬆️ ورود JSON <input type="file" id="import" accept="application/json" hidden /></label>
+      <button id="logout" hidden>خروج از حساب</button>
+    </div>
+    <p class="hint" id="version"></p>
+  </section>
 
   <nav id="tabs">
-    <button data-view="add" class="active">➕ ثبت</button>
-    <button data-view="table">📋 جدول</button>
-    <button data-view="tree">🌳 درخت</button>
-    <button data-view="settings">⚙️ تنظیمات</button>
+    <button data-page="home" class="active"><span>🏠</span>خانه</button>
+    <button data-page="table"><span>📋</span>جدول</button>
+    <button data-page="settings"><span>⚙️</span>تنظیمات</button>
   </nav>
 
-  <main>
-    <section id="view-add" class="view active">
-      <textarea id="raw" rows="4" placeholder="مثلاً: امروز روغن موتور ماشین رو عوض کردم، کیلومتر ۸۵۰۰۰، روغن کاسترول 5W30"></textarea>
-      <div class="row">
-        <button id="save" class="primary">ذخیره و دسته‌بندی</button>
-        <span class="hint">Ctrl + Enter</span>
-      </div>
-      <h3>آخرین یادداشت‌ها</h3>
-      <div id="recent" class="cards"></div>
-    </section>
-
-    <section id="view-search" class="view">
-      <h3 id="search-title"></h3>
-      <div id="results" class="cards"></div>
-    </section>
-
-    <section id="view-table" class="view">
-      <div id="cat-chips" class="chips"></div>
-      <div id="tables"></div>
-    </section>
-
-    <section id="view-tree" class="view">
-      <div class="tree-wrap">
-        <ul id="tree" class="tree"></ul>
-        <div id="tree-notes" class="cards"></div>
-      </div>
-    </section>
-
-    <section id="view-settings" class="view">
-      <h3>سرویس‌های هوش مصنوعی</h3>
-      <p class="hint">Gemini پیش‌فرض است. هر سرویس سازگار با OpenAI (OpenRouter، DeepSeek، Groq، Ollama…) یا Anthropic را هم می‌توانید اضافه کنید.</p>
-      <div id="providers"></div>
-      <div class="row">
-        <button id="add-provider">➕ افزودن سرویس</button>
-        <button id="save-settings" class="primary">ذخیره تنظیمات</button>
-        <button id="test-ai">🧪 تست اتصال</button>
-      </div>
-      <p id="settings-msg" class="hint"></p>
-
-      <h3>پشتیبان‌گیری</h3>
-      <div class="row">
-        <a class="btn" href="#" id="export">⬇️ خروجی JSON</a>
-        <label class="btn">⬆️ ورود JSON <input type="file" id="import" accept="application/json" hidden /></label>
-        <button id="logout" hidden>خروج</button>
-      </div>
-    </section>
-  </main>
-
   <dialog id="login">
-    <form method="dialog" id="login-form">
-      <h3>ورود</h3>
-      <input type="password" id="password" placeholder="رمز عبور" required />
+    <form id="login-form">
+      <h3>ورود به دفترچه</h3>
+      <input id="username" placeholder="نام کاربری" autocomplete="username" dir="ltr" required />
+      <input id="password" type="password" placeholder="رمز عبور" autocomplete="current-password" dir="ltr" required />
       <button class="primary">ورود</button>
       <p id="login-msg" class="hint"></p>
     </form>
@@ -83,27 +96,27 @@
 
   <dialog id="editor">
     <form method="dialog" id="edit-form">
-      <h3>ویرایش یادداشت</h3>
+      <h3>ویرایش</h3>
       <label>متن<textarea name="raw" rows="3"></textarea></label>
       <label>عنوان<input name="title" /></label>
       <div class="row2">
         <label>دسته<input name="category" list="cat-list" /></label>
         <label>زیر دسته<input name="subcategory" /></label>
       </div>
-      <label>تاریخ رویداد<input name="event_date" type="date" /></label>
+      <label>تاریخ<input name="event_date" type="date" /></label>
       <label>تگ‌ها (با کاما)<input name="tags" /></label>
-      <label>فیلدها (هر خط: کلید: مقدار)<textarea name="fields" rows="3"></textarea></label>
+      <label>جزئیات (هر خط: کلید: مقدار)<textarea name="fields" rows="3"></textarea></label>
       <div class="row">
         <button value="save" class="primary">ذخیره</button>
-        <button value="ai" type="submit">🤖 دسته‌بندی دوباره</button>
+        <button value="ai">🤖 دسته‌بندی دوباره</button>
+        <button value="copy">📋 کپی متن</button>
         <button value="delete" class="danger">حذف</button>
-        <button value="cancel" formnovalidate>انصراف</button>
+        <button value="cancel" formnovalidate>بستن</button>
       </div>
     </form>
   </dialog>
   <datalist id="cat-list"></datalist>
-
   <div id="toast"></div>
-  <script src="/app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

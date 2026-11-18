@@ -1,0 +1,8 @@
+{
+  "appId": "com.sahandfarshad.smartnotes",
+  "appName": "Smart Notes",
+  "webDir": "public",
+  "android": { "allowMixedContent": true },
+  "server": { "androidScheme": "https" },
+  "plugins": { "CapacitorHttp": { "enabled": true } }
+}

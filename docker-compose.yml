@@ -1,12 +1,15 @@
+# Manual setup (the one-line installer creates its own compose file in /opt/smart-notes)
 services:
-  smart-notes:
+  app:
     image: ghcr.io/sahandfarshad/smart-notes:latest
     container_name: smart-notes
     restart: unless-stopped
     ports:
       - "8080:8080"
     environment:
-      - APP_PASSWORD=change-me        # رمز ورود به برنامه
-      # - GEMINI_API_KEY=...          # اختیاری؛ از صفحه تنظیمات هم می‌شود وارد کرد
+      PORT_INTERNAL: "8080"
+      DATA_DIR: /data
+      APP_USER: admin
+      APP_PASSWORD: change-me
     volumes:
       - ./data:/data
