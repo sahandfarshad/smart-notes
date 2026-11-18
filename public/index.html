@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#111827" />
+  <title>دفترچه هوشمند</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
+  <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>📒 دفترچه هوشمند</h1>
+    <input id="search" type="search" placeholder="جستجو… (فارسی یا English)" autocomplete="off" />
+  </header>
+
+  <nav id="tabs">
+    <button data-view="add" class="active">➕ ثبت</button>
+    <button data-view="table">📋 جدول</button>
+    <button data-view="tree">🌳 درخت</button>
+    <button data-view="settings">⚙️ تنظیمات</button>
+  </nav>
+
+  <main>
+    <section id="view-add" class="view active">
+      <textarea id="raw" rows="4" placeholder="مثلاً: امروز روغن موتور ماشین رو عوض کردم، کیلومتر ۸۵۰۰۰، روغن کاسترول 5W30"></textarea>
+      <div class="row">
+        <button id="save" class="primary">ذخیره و دسته‌بندی</button>
+        <span class="hint">Ctrl + Enter</span>
+      </div>
+      <h3>آخرین یادداشت‌ها</h3>
+      <div id="recent" class="cards"></div>
+    </section>
+
+    <section id="view-search" class="view">
+      <h3 id="search-title"></h3>
+      <div id="results" class="cards"></div>
+    </section>
+
+    <section id="view-table" class="view">
+      <div id="cat-chips" class="chips"></div>
+      <div id="tables"></div>
+    </section>
+
+    <section id="view-tree" class="view">
+      <div class="tree-wrap">
+        <ul id="tree" class="tree"></ul>
+        <div id="tree-notes" class="cards"></div>
+      </div>
+    </section>
+
+    <section id="view-settings" class="view">
+      <h3>سرویس‌های هوش مصنوعی</h3>
+      <p class="hint">Gemini پیش‌فرض است. هر سرویس سازگار با OpenAI (OpenRouter، DeepSeek، Groq، Ollama…) یا Anthropic را هم می‌توانید اضافه کنید.</p>
+      <div id="providers"></div>
+      <div class="row">
+        <button id="add-provider">➕ افزودن سرویس</button>
+        <button id="save-settings" class="primary">ذخیره تنظیمات</button>
+        <button id="test-ai">🧪 تست اتصال</button>
+      </div>
+      <p id="settings-msg" class="hint"></p>
+
+      <h3>پشتیبان‌گیری</h3>
+      <div class="row">
+        <a class="btn" href="#" id="export">⬇️ خروجی JSON</a>
+        <label class="btn">⬆️ ورود JSON <input type="file" id="import" accept="application/json" hidden /></label>
+        <button id="logout" hidden>خروج</button>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="login">
+    <form method="dialog" id="login-form">
+      <h3>ورود</h3>
+      <input type="password" id="password" placeholder="رمز عبور" required />
+      <button class="primary">ورود</button>
+      <p id="login-msg" class="hint"></p>
+    </form>
+  </dialog>
+
+  <dialog id="editor">
+    <form method="dialog" id="edit-form">
+      <h3>ویرایش یادداشت</h3>
+      <label>متن<textarea name="raw" rows="3"></textarea></label>
+      <label>عنوان<input name="title" /></label>
+      <div class="row2">
+        <label>دسته<input name="category" list="cat-list" /></label>
+        <label>زیر دسته<input name="subcategory" /></label>
+      </div>
+      <label>تاریخ رویداد<input name="event_date" type="date" /></label>
+      <label>تگ‌ها (با کاما)<input name="tags" /></label>
+      <label>فیلدها (هر خط: کلید: مقدار)<textarea name="fields" rows="3"></textarea></label>
+      <div class="row">
+        <button value="save" class="primary">ذخیره</button>
+        <button value="ai" type="submit">🤖 دسته‌بندی دوباره</button>
+        <button value="delete" class="danger">حذف</button>
+        <button value="cancel" formnovalidate>انصراف</button>
+      </div>
+    </form>
+  </dialog>
+  <datalist id="cat-list"></datalist>
+
+  <div id="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

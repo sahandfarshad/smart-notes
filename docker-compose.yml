@@ -1,0 +1,12 @@
+services:
+  smart-notes:
+    image: ghcr.io/sahandfarshad/smart-notes:latest
+    container_name: smart-notes
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - APP_PASSWORD=change-me        # رمز ورود به برنامه
+      # - GEMINI_API_KEY=...          # اختیاری؛ از صفحه تنظیمات هم می‌شود وارد کرد
+    volumes:
+      - ./data:/data
