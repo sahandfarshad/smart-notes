@@ -244,7 +244,7 @@ async function loadSettings() {
   // key saved but no cards yet -> fetch the list automatically
   settings.providers.filter(p => p.hasKey && !modelState[p.id]).forEach(p => fetchModels(p));
   $('#logout').hidden = !settings.auth;
-  $('#version').textContent = (isApp ? 'اپ اندروید' : 'پنل وب') + ' · Smart Notes v4';
+  $('#version').textContent = (isApp ? 'اپ اندروید' : 'پنل وب') + ' · Smart Notes v4.1';
   if (!isApp) {
     $('#server-web').hidden = false;
     fetch('/api/info').then(r => r.json()).then(i => $('#version').textContent = 'پنل وب · Smart Notes v' + i.version).catch(() => {});

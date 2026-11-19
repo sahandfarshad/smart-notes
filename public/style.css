@@ -1,6 +1,7 @@
 @font-face { font-family: Vazirmatn; src: url(fonts/Vazirmatn-Regular.woff2) format('woff2'); font-weight: 400; font-display: swap; }
 @font-face { font-family: Vazirmatn; src: url(fonts/Vazirmatn-Bold.woff2) format('woff2'); font-weight: 700; font-display: swap; }
 :root { --bg: #0f172a; --card: #1e293b; --line: #334155; --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8; --danger: #f87171; --r: 14px; }
+[hidden] { display: none !important; }
 @media (prefers-color-scheme: light) { :root { --bg: #f8fafc; --card: #fff; --line: #e2e8f0; --text: #0f172a; --muted: #64748b; --accent: #0284c7; } }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text); font-family: Vazirmatn, Tahoma, system-ui, sans-serif; }
