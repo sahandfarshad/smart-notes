@@ -18,10 +18,19 @@
       <textarea id="raw" rows="2" placeholder="چی رو ثبت کنم؟ مثلاً: روغن ماشین عوض شد، کیلومتر ۸۵۰۰۰"></textarea>
       <button id="save" class="primary">ثبت</button>
     </div>
-    <div class="searchbox"><span>🔍</span><input id="q1" type="search" placeholder="جستجو…" autocomplete="off" enterkeyhint="search" /></div>
+    <div class="searchbox"><span>🔍</span><input id="q1" type="search" placeholder="جستجو… (غلط تایپی هم پیدا می‌شود)" autocomplete="off" enterkeyhint="search" /></div>
+    <div id="filters" class="chips filters"></div>
+    <div id="recent" class="chips sub"></div>
     <div id="connect-banner" class="banner" hidden>📡 اپ هنوز به سرور وصل نیست. <button id="go-connect">اتصال با توکن</button></div>
     <div id="count1" class="hint"></div>
     <div id="results1" class="list"></div>
+  </section>
+
+  <!-- PAGE: browse (tree / timeline) -->
+  <section id="page-browse" class="page">
+    <div class="seg"><button data-view="tree" class="active">🌳 درختی</button><button data-view="time">🗓️ خط زمانی</button></div>
+    <div class="searchbox"><span>🔍</span><input id="q3" type="search" placeholder="فیلتر…" autocomplete="off" /></div>
+    <div id="browse"></div>
   </section>
 
   <!-- PAGE 2: search + table -->
@@ -89,6 +98,7 @@
 
   <nav id="tabs">
     <button data-page="home" class="active"><span>🏠</span>خانه</button>
+    <button data-page="browse"><span>🌳</span>مرور</button>
     <button data-page="table"><span>📋</span>جدول</button>
     <button data-page="settings"><span>⚙️</span>تنظیمات</button>
   </nav>
@@ -117,11 +127,19 @@
       <label>جزئیات (هر خط: کلید: مقدار)<textarea name="fields" rows="3"></textarea></label>
       <div class="row">
         <button value="save" class="primary">ذخیره</button>
+        <button value="pin" id="pin-btn">📌 سنجاق</button>
         <button value="ai">🤖 دسته‌بندی دوباره</button>
         <button value="copy">📋 کپی متن</button>
         <button value="delete" class="danger">حذف</button>
         <button value="cancel" formnovalidate>بستن</button>
       </div>
+      <div id="related"></div>
+    </form>
+  </dialog>
+  <dialog id="topic">
+    <form method="dialog" id="topic-form">
+      <div id="topic-body"></div>
+      <div class="row"><button value="close">بستن</button></div>
     </form>
   </dialog>
   <datalist id="cat-list"></datalist>

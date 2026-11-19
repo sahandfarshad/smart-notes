@@ -79,3 +79,10 @@ npm install && npm start      # http://localhost:8080
 - Actions: ایمیج Docker روی GHCR و APK در Releases
 
 > کلید امضای APK (`android-signing/`) برای اینکه نسخه‌های جدید روی نسخه قبلی نصب بشن داخل ریپو است. چون ریپو عمومی است، اگر خواستی بعداً به GitHub Secrets منتقلش می‌کنیم.
+
+## v4 – finding things (offline)
+- **Browse tab**: tree (category › subcategory › notes, with counts and last date) and a Jalali timeline (year › month).
+- **Topic card** (ℹ️ in the tree): count, last/first time, days since, usual interval and estimated next date, latest value of every field.
+- **Persian-aware search**: ignores spaces/half-spaces, Persian suffixes (ها/های/…), and small typos.
+- **Filters**: date range (7/30 days, this/last Jalali year) and kind (link, contact, amount, dated, idea).
+- **Pinned notes** (synced), **recent searches**, **on this day in earlier years**, **related notes** in the editor.

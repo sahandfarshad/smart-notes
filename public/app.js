@@ -1,5 +1,5 @@
 // Smart Notes UI – identical on the web panel and in the Android app
-import { search, highlight, byDate, DEFAULT_PROVIDERS, uuid } from './core.js';
+import { search, highlight, byDate, byPinThenDate, DEFAULT_PROVIDERS, uuid, faDate, faNum, kindsOf, KIND_FILTERS, DATE_FILTERS, inDateRange, buildTree, buildTimeline, onThisDay, topicStats, related, noteDate } from './core.js';
 import { RemoteStore, LocalStore } from './store.js';
 
 const $ = s => document.querySelector(s);
@@ -16,7 +16,7 @@ async function copyText(text, el) {
   t.remove(); if (!ok && el) { el.focus(); el.select?.(); }
   return ok;
 }
-const fmtDate = s => (s ? String(s).slice(0, 10) : '');
+const fmtDate = s => (s ? faDate(s) : '');
 
 const isApp = !!window.Capacitor?.isNativePlatform?.() || (location.hostname === 'localhost' && location.protocol === 'https:' && !location.port);
 const store = isApp ? new LocalStore() : new RemoteStore();
@@ -29,7 +29,7 @@ async function reload() {
   $('#cat-list').innerHTML = [...new Set(notes.map(n => n.category))].map(c => `<option value="${esc(c)}">`).join('');
   render();
 }
-function render() { if (page === 'home') renderHome(); if (page === 'table') renderTable(); }
+function render() { if (page === 'home') renderHome(); if (page === 'table') renderTable(); if (page === 'browse') renderBrowse(); }
 
 // ------------------------------------------------------------ navigation
 function go(p) {
@@ -47,19 +47,108 @@ function item(n, q) {
   const warn = n.ai_status === 'error' ? `<div class="warn">⚠️ دسته‌بندی نشد: ${esc(n.ai_error)}</div>` : n.ai_status === 'pending' ? '<div class="warn">⏳ منتظر اینترنت برای دسته‌بندی</div>' : '';
   return `<div class="item" data-uid="${esc(n.uid)}">
     <div class="path">${hl(n.category, q)}${n.subcategory ? ' › ' + hl(n.subcategory, q) : ''} · ${esc(fmtDate(n.event_date || n.created_at))}</div>
-    <div class="title">${hl(n.title, q)}</div>
+    <div class="title">${n.pinned ? '📌 ' : ''}${hl(n.title, q)}</div>
     <div class="snip">${hl(fields || n.raw, q)}</div>
     ${q ? `<div class="tags">${(n.tags || []).map(t => `<span class="tag">${hl(t, q)}</span>`).join('')}</div>` : ''}
     ${warn}</div>`;
 }
-function renderHome() {
-  const q = $('#q1').value;
-  const res = q.trim() ? search(notes, q, 100) : notes.slice(0, 15);
-  $('#count1').textContent = q.trim() ? `${res.length} نتیجه` : (notes.length ? 'آخرین‌ها' : 'هنوز چیزی ثبت نشده. اولین یادداشتت رو بنویس 👆');
-  $('#results1').innerHTML = res.map(n => item(n, q)).join('');
-  $$('#results1 .item').forEach(el => el.onclick = e => { if (e.target.tagName !== 'A') openEditor(el.dataset.uid); });
+// filters (date range + kind of information) and recent searches
+const filt = { date: 'all', kinds: new Set() };
+function renderFilters() {
+  $('#filters').innerHTML = `<select id="f-date">${Object.entries(DATE_FILTERS).map(([k, v]) => `<option value="${k}" ${filt.date === k ? 'selected' : ''}>${v}</option>`).join('')}</select>` +
+    Object.entries(KIND_FILTERS).map(([k, v]) => `<button data-kind="${k}" class="${filt.kinds.has(k) ? 'active' : ''}">${v}</button>`).join('') +
+    (filt.date !== 'all' || filt.kinds.size ? '<button data-clear>✕ حذف فیلترها</button>' : '');
+  $('#f-date').onchange = e => { filt.date = e.target.value; renderFilters(); renderHome(); };
+  $$('#filters [data-kind]').forEach(b => b.onclick = () => { const k = b.dataset.kind; filt.kinds.has(k) ? filt.kinds.delete(k) : filt.kinds.add(k); renderFilters(); renderHome(); });
+  const c = $('#filters [data-clear]'); if (c) c.onclick = () => { filt.date = 'all'; filt.kinds.clear(); renderFilters(); renderHome(); };
 }
-$('#q1').addEventListener('input', renderHome);
+const filtered = list => list.filter(n => inDateRange(n, filt.date) && [...filt.kinds].every(k => kindsOf(n).has(k)));
+const recent = () => { try { return JSON.parse(localStorage.getItem('sn_recent') || '[]'); } catch { return []; } };
+function rememberSearch(q) {
+  q = q.trim(); if (q.length < 2) return;
+  const r = recent().filter(x => x !== q && !q.startsWith(x)); r.unshift(q); localStorage.setItem('sn_recent', JSON.stringify(r.slice(0, 8)));
+}
+function renderRecent() {
+  const r = recent(); const show = !$('#q1').value.trim() && r.length;
+  $('#recent').innerHTML = show ? '<span class="hint" style="margin:0 2px">🕘</span>' + r.map(x => `<button data-q="${esc(x)}">${esc(x)}</button>`).join('') + '<button data-clear-recent title="پاک کردن">✕</button>' : '';
+  $$('#recent [data-q]').forEach(b => b.onclick = () => { $('#q1').value = b.dataset.q; renderHome(); });
+  const c = $('#recent [data-clear-recent]'); if (c) c.onclick = () => { localStorage.removeItem('sn_recent'); renderRecent(); };
+}
+const section = (title, list, q) => list.length ? `<div class="sec">${title}</div>` + list.map(n => item(n, q)).join('') : '';
+function renderHome() {
+  const q = $('#q1').value; const active = q.trim() || filt.date !== 'all' || filt.kinds.size;
+  let html = '';
+  if (active) {
+    const res = filtered(q.trim() ? search(notes, q, 2000) : notes.slice().sort(byPinThenDate)).slice(0, 150);
+    $('#count1').textContent = `${faNum(res.length)} نتیجه`;
+    html = res.map(n => item(n, q)).join('');
+  } else {
+    const pinned = notes.filter(n => n.pinned).sort(byDate);
+    const ago = onThisDay(notes);
+    $('#count1').textContent = notes.length ? '' : 'هنوز چیزی ثبت نشده. اولین یادداشتت رو بنویس 👆';
+    html = section('📌 سنجاق‌شده‌ها', pinned, '') + section('📆 همین روزها در سال‌های قبل', ago, '') +
+      section('🕑 آخرین‌ها', notes.filter(n => !n.pinned).slice(0, 15), '');
+  }
+  $('#results1').innerHTML = html;
+  $$('#results1 .item').forEach(el => el.onclick = e => { if (e.target.tagName !== 'A') openEditor(el.dataset.uid); });
+  renderRecent();
+}
+let recentT;
+$('#q1').addEventListener('input', () => { renderHome(); clearTimeout(recentT); recentT = setTimeout(() => rememberSearch($('#q1').value), 1500); });
+$('#q1').addEventListener('keydown', e => { if (e.key === 'Enter') rememberSearch($('#q1').value); });
+
+// ------------------------------------------------------------ browse: tree + timeline + topic card
+let view = 'tree'; const openNodes = new Set();
+$$('.seg button').forEach(b => b.onclick = () => { view = b.dataset.view; $$('.seg button').forEach(x => x.classList.toggle('active', x === b)); renderBrowse(); });
+$('#q3').addEventListener('input', () => renderBrowse());
+function renderBrowse() {
+  const q = $('#q3').value; const list = q.trim() ? search(notes, q, 5000) : notes;
+  const open = k => (q.trim() || openNodes.has(k) ? 'open' : '');
+  let html = '';
+  if (view === 'tree') {
+    const tree = buildTree(list);
+    html = tree.map(c => `<details class="node" data-k="c:${esc(c.name)}" ${open('c:' + c.name)}>
+      <summary><span class="nname">📁 ${hl(c.name, q)}</span><span class="ncount">${faNum(c.count)}</span><span class="nlast">${fmtDate(c.last)}</span>
+        <button class="ninfo" data-topic="${esc(c.name)}" title="کارت موضوع">ℹ️</button></summary>
+      ${c.subs.map(s => s.name ? `<details class="node sub" data-k="s:${esc(c.name)}/${esc(s.name)}" ${open('s:' + c.name + '/' + s.name)}>
+          <summary><span class="nname">📂 ${hl(s.name, q)}</span><span class="ncount">${faNum(s.count)}</span><span class="nlast">${fmtDate(s.last)}</span>
+            <button class="ninfo" data-topic="${esc(c.name)}" data-sub="${esc(s.name)}" title="کارت موضوع">ℹ️</button></summary>
+          ${s.notes.map(n => leaf(n, q)).join('')}</details>` : s.notes.map(n => leaf(n, q)).join('')).join('')}
+    </details>`).join('');
+  } else {
+    const tl = buildTimeline(list);
+    html = tl.map((y, i) => `<details class="node" data-k="y:${y.year}" ${open('y:' + y.year) || (i === 0 && ![...openNodes].some(k => k.startsWith('y:')) ? 'open' : '')}>
+      <summary><span class="nname">🗓️ ${faNum(y.year)}</span><span class="ncount">${faNum(y.count)}</span></summary>
+      ${y.months.map(m => `<div class="month">${m.name} ${faNum(y.year)} <span class="hint">(${faNum(m.notes.length)})</span></div>${m.notes.map(n => leaf(n, q, true)).join('')}`).join('')}
+    </details>`).join('');
+  }
+  $('#browse').innerHTML = html || '<p class="hint">چیزی پیدا نشد.</p>';
+  $$('#browse details').forEach(d => d.ontoggle = () => { if (!q.trim()) d.open ? openNodes.add(d.dataset.k) : openNodes.delete(d.dataset.k); });
+  $$('#browse .leaf').forEach(el => el.onclick = e => { if (e.target.tagName !== 'A') openEditor(el.dataset.uid); });
+  $$('#browse [data-topic]').forEach(b => b.onclick = e => { e.preventDefault(); e.stopPropagation(); openTopic(b.dataset.topic, b.dataset.sub); });
+}
+const leaf = (n, q, withPath) => `<div class="leaf" data-uid="${esc(n.uid)}"><span class="ldate">${fmtDate(noteDate(n))}</span>
+  <span>${n.pinned ? '📌 ' : ''}${hl(n.title, q)}${withPath ? ` <span class="lpath">· ${esc(n.category)}${n.subcategory ? ' › ' + esc(n.subcategory) : ''}</span>` : ''}</span></div>`;
+
+function openTopic(category, subcategory) {
+  const t = topicStats(notes, category, subcategory);
+  if (!subcategory && t.subs.length > 1) t.every = null; // the usual interval only makes sense for one kind of event
+  const next = t.every && t.last ? new Date(Date.parse(t.last) + t.every * 864e5).toISOString().slice(0, 10) : null;
+  const latest = Object.entries(t.latest);
+  $('#topic-body').innerHTML = `<h3>${esc(category)}${subcategory ? ' › ' + esc(subcategory) : ''}</h3>
+    <div class="stats">
+      <div><b>${faNum(t.list.length)}</b><span>یادداشت</span></div>
+      <div><b>${t.last ? fmtDate(t.last) : '—'}</b><span>آخرین بار${t.daysSince != null ? ` (${faNum(t.daysSince)} روز پیش)` : ''}</span></div>
+      ${t.every ? `<div><b>هر ~${faNum(t.every)} روز</b><span>فاصله معمول${next ? ` · بعدی حدود ${fmtDate(next)}` : ''}</span></div>` : ''}
+      <div><b>${t.first ? fmtDate(t.first) : '—'}</b><span>اولین بار</span></div>
+    </div>
+    ${latest.length ? `<div class="sec">آخرین مقدارها</div><table class="kv">${latest.map(([k, v]) => `<tr data-uid="${esc(v.uid)}"><th>${esc(k)}</th><td>${hl(v.value, '')}</td><td class="nowrap hint">${fmtDate(v.date)}</td></tr>`).join('')}</table>` : ''}
+    ${!subcategory && t.subs.length ? `<div class="chips sub">${t.subs.map(s => `<button data-tsub="${esc(s)}">${esc(s)}</button>`).join('')}</div>` : ''}
+    <div class="sec">همه یادداشت‌ها</div>${t.list.map(n => leaf(n, '')).join('')}`;
+  $$('#topic-body .leaf, #topic-body tr[data-uid]').forEach(el => el.onclick = () => { $('#topic').close(); openEditor(el.dataset.uid); });
+  $$('#topic-body [data-tsub]').forEach(b => b.onclick = e => { e.preventDefault(); openTopic(category, b.dataset.tsub); });
+  if (!$('#topic').open) $('#topic').showModal();
+}
 const grow = () => { const t = $('#raw'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 220) + 'px'; };
 $('#raw').addEventListener('input', grow);
 async function save() {
@@ -112,6 +201,9 @@ function openEditor(uid) {
   f.raw.value = editing.raw; f.title.value = editing.title; f.category.value = editing.category; f.subcategory.value = editing.subcategory || '';
   f.event_date.value = editing.event_date || ''; f.tags.value = (editing.tags || []).join(', ');
   f.fields.value = Object.entries(editing.fields || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
+  $('#pin-btn').textContent = editing.pinned ? '📌 برداشتن سنجاق' : '📌 سنجاق';
+  const rel = related(notes, editing);
+  $('#related').innerHTML = rel.length ? '<div class="sec">🔗 یادداشت‌های مرتبط</div>' + rel.map(n => `<button class="relbtn" value="open:${esc(n.uid)}" formnovalidate>${esc(fmtDate(noteDate(n)))} · ${esc(n.title)}</button>`).join('') : '';
   $('#editor').showModal();
 }
 $('#editor').addEventListener('close', async () => {
@@ -123,6 +215,10 @@ $('#editor').addEventListener('close', async () => {
       await store.update(n.uid, { raw: f.raw.value, title: f.title.value, category: f.category.value, subcategory: f.subcategory.value,
         event_date: f.event_date.value || null, tags: f.tags.value.split(/[,،]/).map(s => s.trim()).filter(Boolean), fields });
       toast('ذخیره شد');
+    } else if (action === 'pin') {
+      await store.update(n.uid, { pinned: n.pinned ? 0 : 1 }); toast(n.pinned ? 'سنجاق برداشته شد' : '📌 سنجاق شد');
+    } else if (action.startsWith('open:')) {
+      setTimeout(() => openEditor(action.slice(5)), 50); return;
     } else if (action === 'ai') {
       if (f.raw.value !== n.raw) await store.update(n.uid, { raw: f.raw.value });
       toast('🤖 …'); const r = await store.reclassify(n.uid); toast(r.ai_status === 'done' ? `✅ ${r.category}` : '⚠️ ' + (r.ai_error || ''));
@@ -148,7 +244,7 @@ async function loadSettings() {
   // key saved but no cards yet -> fetch the list automatically
   settings.providers.filter(p => p.hasKey && !modelState[p.id]).forEach(p => fetchModels(p));
   $('#logout').hidden = !settings.auth;
-  $('#version').textContent = (isApp ? 'اپ اندروید' : 'پنل وب') + ' · Smart Notes v3.2';
+  $('#version').textContent = (isApp ? 'اپ اندروید' : 'پنل وب') + ' · Smart Notes v4';
   if (!isApp) {
     $('#server-web').hidden = false;
     fetch('/api/info').then(r => r.json()).then(i => $('#version').textContent = 'پنل وب · Smart Notes v' + i.version).catch(() => {});
@@ -345,7 +441,7 @@ $('#login-form').addEventListener('submit', async e => {
     await store.init();
     window.addEventListener('online', async () => { const n = await store.retryPending(); if (n) { toast(`🤖 ${n} یادداشت دسته‌بندی شد`); reload(); } autoSync(); });
   } else if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
-  await reload(); updateBadge();
+  renderFilters(); await reload(); updateBadge();
   if (isApp) { autoSync(); store.retryPending().then(n => n && reload()); }
   document.addEventListener('visibilitychange', () => { if (document.hidden) return; isApp ? autoSync() : reload(); });
   setInterval(() => { if (document.hidden || $('#editor').open) return; isApp ? autoSync() : reload(); }, isApp ? 60000 : 30000);
