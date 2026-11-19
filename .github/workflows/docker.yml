@@ -45,15 +45,16 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: docker/setup-qemu-action@v3
-      - name: Save images
+      - name: Save images (one file per CPU type)
         run: |
+          set -euo pipefail
+          IMG=ghcr.io/${{ github.repository }}:latest
           for arch in amd64 arm64; do
-            docker pull --platform linux/$arch ghcr.io/${{ github.repository }}:latest
-            docker save ghcr.io/${{ github.repository }}:latest | gzip > smart-notes-image-$arch.tar.gz
-            docker rmi ghcr.io/${{ github.repository }}:latest
+            skopeo copy --override-os linux --override-arch $arch docker://$IMG docker-archive:smart-notes-image-$arch.tar:$IMG
+            gzip -f smart-notes-image-$arch.tar
           done
           ls -lh *.tar.gz
+          for f in *.tar.gz; do [ $(stat -c%s $f) -gt 10000000 ] || { echo "$f is too small"; exit 1; }; done
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: server-image

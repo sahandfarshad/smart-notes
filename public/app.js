@@ -7,6 +7,15 @@ const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const hl = (s, q) => highlight(esc(s), q).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
 const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 2600); };
+// copy that also works on http:// (navigator.clipboard only exists on https/localhost)
+async function copyText(text, el) {
+  try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; } } catch {}
+  const t = document.createElement('textarea'); t.value = text; t.setAttribute('readonly', ''); t.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+  document.body.appendChild(t); t.select(); t.setSelectionRange(0, text.length);
+  let ok = false; try { ok = document.execCommand('copy'); } catch {}
+  t.remove(); if (!ok && el) { el.focus(); el.select?.(); }
+  return ok;
+}
 const fmtDate = s => (s ? String(s).slice(0, 10) : '');
 
 const isApp = !!window.Capacitor?.isNativePlatform?.() || (location.hostname === 'localhost' && location.protocol === 'https:' && !location.port);
@@ -118,7 +127,7 @@ $('#editor').addEventListener('close', async () => {
       if (f.raw.value !== n.raw) await store.update(n.uid, { raw: f.raw.value });
       toast('🤖 …'); const r = await store.reclassify(n.uid); toast(r.ai_status === 'done' ? `✅ ${r.category}` : '⚠️ ' + (r.ai_error || ''));
     } else if (action === 'copy') {
-      await navigator.clipboard.writeText(n.raw).then(() => toast('کپی شد'), () => toast('کپی نشد'));
+      toast(await copyText(n.raw) ? '✅ کپی شد' : 'کپی نشد');
       return;
     } else if (action === 'delete') {
       if (!confirm('حذف شود؟')) return;
@@ -139,9 +148,10 @@ async function loadSettings() {
   // key saved but no cards yet -> fetch the list automatically
   settings.providers.filter(p => p.hasKey && !modelState[p.id]).forEach(p => fetchModels(p));
   $('#logout').hidden = !settings.auth;
-  $('#version').textContent = (isApp ? 'اپ اندروید' : 'پنل وب') + ' · Smart Notes v3.1';
+  $('#version').textContent = (isApp ? 'اپ اندروید' : 'پنل وب') + ' · Smart Notes v3.2';
   if (!isApp) {
     $('#server-web').hidden = false;
+    fetch('/api/info').then(r => r.json()).then(i => $('#version').textContent = 'پنل وب · Smart Notes v' + i.version).catch(() => {});
     store.syncToken().then(r => $('#sync-token').value = r.token).catch(() => {});
   } else {
     $('#server-app').hidden = false;
@@ -256,7 +266,11 @@ $('#add-provider').onclick = () => { settings.providers.push({ id: uuid(), name:
 $('#save-settings').onclick = () => persist('✅ ذخیره شد').then(ok => ok && renderProviders());
 
 // web: sync token
-$('#copy-token').onclick = () => { $('#sync-token').select(); navigator.clipboard.writeText($('#sync-token').value).then(() => toast('کپی شد'), () => document.execCommand('copy')); };
+$('#copy-token').onclick = async () => {
+  const b = $('#copy-token'); const ok = await copyText($('#sync-token').value, $('#sync-token'));
+  b.textContent = ok ? '✅ کپی شد' : '❌ کپی نشد'; b.classList.toggle('primary', ok); toast(ok ? '✅ توکن کپی شد' : 'کپی نشد؛ توکن انتخاب شده، Ctrl+C بزنید');
+  clearTimeout(b.t); b.t = setTimeout(() => { b.textContent = 'کپی'; b.classList.remove('primary'); }, 2500);
+};
 $('#regen-token').onclick = async () => { if (!confirm('توکن قبلی باطل شود؟ اپ‌های متصل باید دوباره وصل شوند.')) return; await store.regenerateSyncToken(); loadSettings(); toast('توکن جدید ساخته شد'); };
 // app: server connection
 $('#paste-clip').onclick = async () => { try { $('#paste-token').value = (await navigator.clipboard.readText()).trim(); } catch { toast('با نگه داشتن انگشت روی کادر، Paste را بزنید'); $('#paste-token').focus(); } };
@@ -303,7 +317,7 @@ $('#export').onclick = async () => {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' })); a.download = name; a.click();
   toast('✅ فایل پشتیبان دانلود شد');
 };
-$('#copy-export').onclick = () => { $('#export-text').select(); navigator.clipboard.writeText($('#export-text').value).then(() => toast('کپی شد'), () => document.execCommand('copy')); };
+$('#copy-export').onclick = async () => toast(await copyText($('#export-text').value, $('#export-text')) ? '✅ کپی شد' : 'کپی نشد؛ متن انتخاب شده، دستی کپی کنید');
 $('#import').onchange = async e => {
   const f = e.target.files[0]; e.target.value = ''; if (!f) return;
   try {
