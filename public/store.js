@@ -38,6 +38,12 @@ export class RemoteStore {
   regenerateSyncToken() { return this.api('/sync/token/regenerate', { method: 'POST' }); }
 }
 
+// server replies must be JSON; an HTML page means a wrong address or an old server version
+async function readJson(r, url) {
+  const text = await r.text();
+  try { return JSON.parse(text); } catch { throw new Error('پاسخ سرور نامعتبر است (' + url + '). سرور را با smartnotes › Update به نسخه ۳ به‌روز کنید'); }
+}
+
 // ---------------------------------------------------------------- local (Android, offline)
 function idb() {
   return new Promise((resolve, reject) => {
@@ -48,7 +54,7 @@ function idb() {
 }
 const tx = (db, store, mode, fn) => new Promise((resolve, reject) => {
   const t = db.transaction(store, mode); const out = fn(t.objectStore(store));
-  t.oncomplete = () => resolve(out?.result ?? out); t.onerror = () => reject(t.error);
+  t.oncomplete = () => resolve(out instanceof IDBRequest ? out.result : out); t.onerror = () => reject(t.error);
 });
 
 export class LocalStore {
@@ -127,14 +133,14 @@ export class LocalStore {
   }
 
   // ---- server connection
-  async server() { return this.kvGet('server', null); }
+  async server() { const s = await this.kvGet('server', null); return s && s.url && s.key ? s : null; }
   async connect(token) {
     const { url, key } = decodeSyncToken(token);
     let r;
     try { r = await fetch(url + '/api/sync', { headers: { Authorization: 'Bearer ' + key } }); } catch { throw new Error('سرور در دسترس نیست: ' + url); }
     if (r.status === 401) throw new Error('توکن پذیرفته نشد');
     if (!r.ok) throw new Error('سرور در دسترس نیست');
-    const remote = await r.json();
+    const remote = await readJson(r, url);
     // first connection: AI settings come from the server, notes of both sides are merged
     if (remote.ai?.providers) await this.setAi(remote.ai);
     await this.replaceAll(mergeNotes(this.cache, remote.notes || []));
@@ -154,7 +160,7 @@ export class LocalStore {
       } catch { throw new Error('سرور در دسترس نیست'); }
       if (r.status === 401) throw new Error('توکن باطل شده؛ توکن جدید را وارد کنید');
       if (!r.ok) throw new Error('همگام‌سازی ناموفق بود');
-      const remote = await r.json();
+      const remote = await readJson(r, srv.url);
       await this.replaceAll(mergeNotes(this.cache, remote.notes || []));
       const mine = await this.getAi();
       if (remote.ai?.providers && String(remote.ai.updated_at) > String(mine.updated_at)) await this.setAi(remote.ai);

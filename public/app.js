@@ -130,12 +130,16 @@ $('#editor').addEventListener('close', async () => {
 
 // ------------------------------------------------------------ settings
 let settings = { providers: [] };
-const modelState = {}; // providerId -> { list, filter, onlyOk, tests: { model: {status, ms, error} } }
+// providerId -> { list, filter, onlyOk, tests: { model: {status, ms, error} } }; kept in localStorage so the cards stay after reopening
+const modelState = (() => { try { return JSON.parse(localStorage.getItem('sn_models') || '{}'); } catch { return {}; } })();
+const saveModels = () => { try { const keep = {}; for (const [k, v] of Object.entries(modelState)) if (v.list) keep[k] = { list: v.list, onlyOk: v.onlyOk, tests: Object.fromEntries(Object.entries(v.tests || {}).filter(([, t]) => t.status !== 'testing')) }; localStorage.setItem('sn_models', JSON.stringify(keep)); } catch {} };
 async function loadSettings() {
   try { settings = await store.getSettings(); } catch { return; }
   renderProviders();
+  // key saved but no cards yet -> fetch the list automatically
+  settings.providers.filter(p => p.hasKey && !modelState[p.id]).forEach(p => fetchModels(p));
   $('#logout').hidden = !settings.auth;
-  $('#version').textContent = (isApp ? 'اپ اندروید' : 'پنل وب') + ' · Smart Notes v3';
+  $('#version').textContent = (isApp ? 'اپ اندروید' : 'پنل وب') + ' · Smart Notes v3.1';
   if (!isApp) {
     $('#server-web').hidden = false;
     store.syncToken().then(r => $('#sync-token').value = r.token).catch(() => {});
@@ -187,14 +191,14 @@ function renderProviders() {
     <input data-k="apiKey" type="password" dir="ltr" autocomplete="off" placeholder="${p.hasKey ? 'کلید ذخیره شده ' + esc(p.apiKeyMasked) + ' (برای تغییر، کلید جدید بنویسید)' : 'API Key'}" value="${esc(p.apiKey || '')}" />
     <details><summary>تنظیمات پیشرفته (آدرس سرویس)</summary><input data-k="baseUrl" value="${esc(p.baseUrl)}" placeholder="Base URL" dir="ltr" /></details>
     <div class="cur-model">مدل: <b dir="ltr">${esc(p.model || 'انتخاب نشده')}</b></div>
-    <div class="row" style="margin:4px 0"><button data-models class="primary">🔎 دریافت مدل‌ها</button></div>
+    <div class="row" style="margin:4px 0"><button data-models class="primary">${modelState[p.id]?.list ? '🔄 به‌روزرسانی فهرست مدل‌ها' : '🔎 دریافت مدل‌ها'}</button></div>
     <div data-cards>${modelCards(p)}</div>
   </div>`).join('');
   $$('#providers .provider').forEach(el => {
     const p = settings.providers[el.dataset.i];
     el.querySelectorAll('[data-k]').forEach(inp => inp.oninput = () => {
       p[inp.dataset.k] = inp.value;
-      if (inp.dataset.k === 'kind') { Object.assign(p, DEFAULT_PROVIDERS[inp.value], { model: '' }); delete modelState[p.id]; renderProviders(); }
+      if (inp.dataset.k === 'kind') { Object.assign(p, DEFAULT_PROVIDERS[inp.value], { model: '' }); delete modelState[p.id]; saveModels(); renderProviders(); }
     });
     el.querySelector('[name=active]').onchange = e => { settings.activeProvider = e.target.value; persist('✅ سرویس فعال تغییر کرد'); };
     el.querySelector('[data-del]').onclick = () => { if (!confirm('این سرویس حذف شود؟')) return; settings.providers.splice(+el.dataset.i, 1); persist('حذف شد').then(renderProviders); };
@@ -212,7 +216,7 @@ function rerenderCards(p) {
 function bindCards(el, p) {
   const st = modelState[p.id]; if (!st || !st.list) return;
   const f = el.querySelector('[data-mfilter]'); if (f) f.oninput = () => { st.filter = f.value; rerenderCards(p); };
-  const o = el.querySelector('[data-onlyok]'); if (o) o.onchange = () => { st.onlyOk = o.checked; rerenderCards(p); };
+  const o = el.querySelector('[data-onlyok]'); if (o) o.onchange = () => { st.onlyOk = o.checked; rerenderCards(p); saveModels(); };
   const ta = el.querySelector('[data-testall]'); if (ta) ta.onclick = () => testAll(p);
   el.querySelectorAll('.mcard').forEach(c => c.onclick = async e => {
     const id = c.dataset.model;
@@ -229,13 +233,13 @@ async function fetchModels(p) {
     if (p.apiKey) await persist('✅ کلید ذخیره شد'); // key worked -> keep it
     if (!list.length) modelState[p.id].error = 'مدلی پیدا نشد';
   } catch (e) { modelState[p.id] = { error: e.message + (p.kind === 'gemini' && !isApp ? ' (اگر سرور در ایران است، گوگل ممکن است IP آن را مسدود کند)' : ''), tests: {} }; }
-  renderProviders();
+  saveModels(); renderProviders();
 }
 async function testOne(p, id) {
   const st = modelState[p.id]; st.tests[id] = { status: 'testing' }; rerenderCards(p);
   try { const r = await store.testModel({ ...p }, id); st.tests[id] = r.ok ? { status: 'ok', ms: r.ms } : { status: 'bad', error: r.error }; }
   catch (e) { st.tests[id] = { status: 'bad', error: e.message }; }
-  rerenderCards(p);
+  rerenderCards(p); saveModels();
 }
 async function testAll(p) {
   const st = modelState[p.id]; const f = (st.filter || '').toLowerCase();

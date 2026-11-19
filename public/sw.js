@@ -1,5 +1,5 @@
 // App shell cache (web panel). API calls always go to the network.
-const CACHE = 'smart-notes-v3';
+const CACHE = 'smart-notes-v3.1';
 const SHELL = ['./', 'index.html', 'app.js', 'core.js', 'store.js', 'style.css', 'manifest.json', 'icon.svg', 'fonts/Vazirmatn-Regular.woff2', 'fonts/Vazirmatn-Bold.woff2'];
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));
