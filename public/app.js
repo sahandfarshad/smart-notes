@@ -45,13 +45,31 @@ $$('#tabs button').forEach(b => b.onclick = () => go(b.dataset.page));
 // ------------------------------------------------------------ page 1: add + instant search
 function item(n, q) {
   const fields = Object.entries(n.fields || {}).map(([k, v]) => `${k}: ${v}`).join(' · ');
-  const warn = n.ai_status === 'error' ? `<div class="warn">⚠️ دسته‌بندی نشد: ${esc(n.ai_error)}</div>` : n.ai_status === 'pending' ? '<div class="warn">⏳ منتظر اینترنت برای دسته‌بندی</div>' : '';
+  const warn = n.ai_status === 'error' ? `<div class="warn">⚠️ دسته‌بندی نشد: ${esc(aiErr(n.ai_error))} <button class="retry" data-retry="${esc(n.uid)}">🔄 تلاش دوباره</button></div>`
+    : n.ai_status === 'pending' ? `<div class="warn">⏳ منتظر اینترنت برای دسته‌بندی <button class="retry" data-retry="${esc(n.uid)}">🔄 تلاش دوباره</button></div>` : '';
   return `<div class="item" data-uid="${esc(n.uid)}">
     <div class="path">${hl(n.category, q)}${n.subcategory ? ' › ' + hl(n.subcategory, q) : ''} · ${esc(fmtDate(n.event_date || n.created_at))}</div>
     <div class="title">${n.pinned ? '📌 ' : ''}${hl(n.title, q)}</div>
     <div class="snip">${hl(fields || n.raw, q)}</div>
     ${q ? `<div class="tags">${(n.tags || []).map(t => `<span class="tag">${hl(t, q)}</span>`).join('')}</div>` : ''}
     ${warn}</div>`;
+}
+// AI errors in plain words (Google blocks Gemini for some countries, e.g. Iran IPs)
+function aiErr(e) {
+  e = String(e || '');
+  if (/location is not supported|unsupported.*(country|region|location)|not available in your country/i.test(e)) return 'سرویس هوش مصنوعی از این کشور در دسترس نیست (محدودیت گوگل). VPN را روشن کنید و «تلاش دوباره» را بزنید.';
+  return e;
+}
+const failedNotes = () => notes.filter(n => n.ai_status && n.ai_status !== 'done');
+let retrying = false;
+async function retryAi(uids) {
+  if (retrying) return; retrying = true; let ok = 0;
+  toast(`🤖 دسته‌بندی دوباره ${faNum(uids.length)} یادداشت…`);
+  try {
+    for (const uid of uids) { try { const r = await store.reclassify(uid); if (r?.ai_status === 'done') ok++; } catch (e) { if (e.message === 'auth') break; } }
+    toast(ok ? `✅ ${faNum(ok)} از ${faNum(uids.length)} یادداشت دسته‌بندی شد` : '⚠️ باز هم نشد؛ اتصال یا VPN را بررسی کنید');
+  } finally { retrying = false; }
+  await reload(); autoSync();
 }
 // filters (date range + kind of information) and recent searches
 const filt = { date: 'all', kinds: new Set() };
@@ -90,8 +108,12 @@ function renderHome() {
     html = section('📌 سنجاق‌شده‌ها', pinned, '') + section('📆 همین روزها در سال‌های قبل', ago, '') +
       section('🕑 آخرین‌ها', notes.filter(n => !n.pinned).slice(0, 15), '');
   }
+  const failed = failedNotes();
+  if (failed.length && !active) html = `<div class="banner">⚠️ ${faNum(failed.length)} یادداشت دسته‌بندی نشده <button data-retry-all class="primary">🔄 تلاش دوباره همه</button></div>` + html;
   $('#results1').innerHTML = html;
-  $$('#results1 .item').forEach(el => el.onclick = e => { if (e.target.tagName !== 'A') openEditor(el.dataset.uid); });
+  $$('#results1 .item').forEach(el => el.onclick = e => { if (e.target.tagName !== 'A' && !e.target.closest('[data-retry]')) openEditor(el.dataset.uid); });
+  $$('#results1 [data-retry]').forEach(b => b.onclick = e => { e.stopPropagation(); retryAi([b.dataset.retry]); });
+  const ra = $('#results1 [data-retry-all]'); if (ra) ra.onclick = () => retryAi(failedNotes().map(n => n.uid));
   renderRecent();
 }
 let recentT;
@@ -353,7 +375,7 @@ $('#editor').addEventListener('close', async () => {
       setTimeout(() => openEditor(action.slice(5)), 50); return;
     } else if (action === 'ai') {
       if (f.raw.value !== n.raw) await store.update(n.uid, { raw: f.raw.value });
-      toast('🤖 …'); const r = await store.reclassify(n.uid); toast(r.ai_status === 'done' ? `✅ ${r.category}` : '⚠️ ' + (r.ai_error || ''));
+      toast('🤖 …'); const r = await store.reclassify(n.uid); toast(r.ai_status === 'done' ? `✅ ${r.category}` : '⚠️ ' + aiErr(r.ai_error));
     } else if (action === 'copy') {
       toast(await copyText(n.raw) ? '✅ کپی شد' : 'کپی نشد');
       return;
@@ -376,7 +398,7 @@ async function loadSettings() {
   // key saved but no cards yet -> fetch the list automatically
   settings.providers.filter(p => p.hasKey && !modelState[p.id]).forEach(p => fetchModels(p));
   $('#logout').hidden = !settings.auth;
-  $('#version').textContent = (isApp ? 'اپ اندروید' : 'پنل وب') + ' · Smart Notes v4.2';
+  $('#version').textContent = (isApp ? 'اپ اندروید' : 'پنل وب') + ' · Smart Notes v4.3';
   if (!isApp) {
     $('#server-web').hidden = false;
     fetch('/api/info').then(r => r.json()).then(i => $('#version').textContent = 'پنل وب · Smart Notes v' + i.version).catch(() => {});

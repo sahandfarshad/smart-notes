@@ -118,7 +118,7 @@ app.use('/api', (req, res, next) => { // CORS for the Android app
 
 const sessionToken = () => crypto.createHash('sha256').update(`smart-notes:${APP_USER}:${APP_PASSWORD}`).digest('hex');
 const same = (a, b) => { const h = x => crypto.createHash('sha256').update(String(x)).digest(); return crypto.timingSafeEqual(h(a), h(b)); };
-app.get('/api/info', (req, res) => res.json({ app: 'smart-notes', version: '4.2', auth: !!APP_PASSWORD }));
+app.get('/api/info', (req, res) => res.json({ app: 'smart-notes', version: '4.3', auth: !!APP_PASSWORD }));
 app.post('/api/login', (req, res) => {
   if (!APP_PASSWORD) return res.json({ token: '' });
   if (same(s(req.body?.username), APP_USER) && same(s(req.body?.password), APP_PASSWORD)) return res.json({ token: sessionToken() });

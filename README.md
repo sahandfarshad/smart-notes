@@ -93,3 +93,7 @@ npm install && npm start      # http://localhost:8080
 - Images: pick a file, or paste with Ctrl+V on desktop. They are shrunk on the device (max 1800px JPEG) before saving.
 - 🔒 **The AI never sees this section**: it lives in its own table (`infos`) on the server and its own store on the phone, and is never passed to the classifier.
 - Synced with the Android app incrementally (only new or changed items travel, so images don't slow sync), and included in backup/restore.
+
+## v4.3 – retry AI
+- Notes that failed to classify (e.g. Gemini's "User location is not supported" from Iran IPs) show a **🔄 تلاش دوباره** button, and the home page has **تلاش دوباره همه**: turn on a VPN and tap it.
+- The location error is shown in plain Persian.
