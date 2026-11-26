@@ -86,3 +86,10 @@ npm install && npm start      # http://localhost:8080
 - **Persian-aware search**: ignores spaces/half-spaces, Persian suffixes (ها/های/…), and small typos.
 - **Filters**: date range (7/30 days, this/last Jalali year) and kind (link, contact, amount, dated, idea).
 - **Pinned notes** (synced), **recent searches**, **on this day in earlier years**, **related notes** in the editor.
+
+## v4.2 – useful info (📎 کاربردی)
+- New **کاربردی** tab for things you use every day: links, card numbers, addresses, and **images** (ID card, QR code, screenshots…).
+- One tap copies the text; links have an open button; images can be copied (HTTPS) or shared/saved (Android share sheet, or download on HTTP).
+- Images: pick a file, or paste with Ctrl+V on desktop. They are shrunk on the device (max 1800px JPEG) before saving.
+- 🔒 **The AI never sees this section**: it lives in its own table (`infos`) on the server and its own store on the phone, and is never passed to the classifier.
+- Synced with the Android app incrementally (only new or changed items travel, so images don't slow sync), and included in backup/restore.

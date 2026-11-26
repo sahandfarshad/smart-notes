@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS notes (
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- "useful info" (v4.2): links, texts and images for everyday use. Kept in its own table and NEVER sent to the AI.
+CREATE TABLE IF NOT EXISTS infos (
+  uid TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '', image TEXT NOT NULL DEFAULT '',
+  ord REAL NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
 `);
 // migrate v1 databases
 const cols = db.prepare('PRAGMA table_info(notes)').all().map(c => c.name);
@@ -77,6 +82,21 @@ function setAi(ai, keepOldKeys = false) {
 /** provider sent by the UI: if its key field is empty, use the saved key */
 const withSavedKey = p => ({ ...cleanProvider(p || {}, getSetting('providers', []).find(o => o.id === p?.id)) });
 
+// ---- useful info (no AI access: these functions are never used by classify())
+const parseInfo = r => r && ({ uid: r.uid, title: r.title, text: r.text, image: r.image, ord: r.ord, deleted: r.deleted ? 1 : 0, created_at: r.created_at, updated_at: r.updated_at });
+const getInfo = uid => parseInfo(db.prepare('SELECT * FROM infos WHERE uid=?').get(uid));
+const allInfos = (withDeleted = false) => db.prepare(`SELECT * FROM infos ${withDeleted ? '' : 'WHERE deleted=0'} ORDER BY ord, created_at DESC`).all().map(parseInfo);
+const upsertInfo = db.prepare(`INSERT INTO infos(uid,title,text,image,ord,deleted,created_at,updated_at) VALUES(@uid,@title,@text,@image,@ord,@deleted,@created_at,@updated_at)
+  ON CONFLICT(uid) DO UPDATE SET title=excluded.title,text=excluded.text,image=excluded.image,ord=excluded.ord,deleted=excluded.deleted,created_at=excluded.created_at,updated_at=excluded.updated_at`);
+const IMG_OK = v => /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(v);
+function saveInfo(i) {
+  const now = new Date().toISOString(); const img = s(i.image);
+  upsertInfo.run({ uid: s(i.uid) || crypto.randomUUID(), title: s(i.title).slice(0, 300), text: s(i.text), image: img && IMG_OK(img) ? img : '',
+    ord: Number(i.ord) || 0, deleted: i.deleted ? 1 : 0, created_at: s(i.created_at) || now, updated_at: s(i.updated_at) || now });
+}
+/** keep the newer version of each incoming info; returns nothing */
+const mergeInfosIn = list => { for (const i of list) { if (!i || !i.uid) continue; const c = db.prepare('SELECT updated_at FROM infos WHERE uid=?').get(i.uid); if (!c || s(i.updated_at) > s(c.updated_at)) saveInfo(i); } };
+
 async function classify(uid) {
   const n = parse(toRow(uid)); if (!n) return;
   try { Object.assign(n, await classifyText(activeProvider(), n.raw, allNotes())); }
@@ -87,7 +107,7 @@ async function classify(uid) {
 // ---------------------------------------------------------------- app
 const app = express();
 app.set('trust proxy', true);
-app.use(express.json({ limit: '20mb' }));
+app.use(express.json({ limit: '100mb' }));
 app.use('/api', (req, res, next) => { // CORS for the Android app
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -98,7 +118,7 @@ app.use('/api', (req, res, next) => { // CORS for the Android app
 
 const sessionToken = () => crypto.createHash('sha256').update(`smart-notes:${APP_USER}:${APP_PASSWORD}`).digest('hex');
 const same = (a, b) => { const h = x => crypto.createHash('sha256').update(String(x)).digest(); return crypto.timingSafeEqual(h(a), h(b)); };
-app.get('/api/info', (req, res) => res.json({ app: 'smart-notes', version: '4.1', auth: !!APP_PASSWORD }));
+app.get('/api/info', (req, res) => res.json({ app: 'smart-notes', version: '4.2', auth: !!APP_PASSWORD }));
 app.post('/api/login', (req, res) => {
   if (!APP_PASSWORD) return res.json({ token: '' });
   if (same(s(req.body?.username), APP_USER) && same(s(req.body?.password), APP_PASSWORD)) return res.json({ token: sessionToken() });
@@ -130,8 +150,21 @@ app.delete('/api/notes/:uid', (req, res) => {
   res.json({ ok: true });
 });
 
+// ---- useful info (web panel)
+app.get('/api/infos', (req, res) => res.json(allInfos()));
+app.put('/api/infos/:uid', (req, res) => {
+  const b = req.body || {}; const old = getInfo(req.params.uid);
+  if (b.image && !IMG_OK(s(b.image))) return res.status(400).json({ error: 'فرمت عکس پشتیبانی نمی‌شود' });
+  saveInfo({ ...(old || {}), ...b, uid: req.params.uid, created_at: old?.created_at, updated_at: new Date().toISOString() });
+  res.json(getInfo(req.params.uid));
+});
+app.delete('/api/infos/:uid', (req, res) => {
+  const i = getInfo(req.params.uid); if (i) saveInfo({ ...i, deleted: 1, image: '', updated_at: new Date().toISOString() });
+  res.json({ ok: true });
+});
+
 // ---- sync (Android app, with the sync token): notes by uid, newest updated_at wins (deletes are tombstones), AI settings newest wins
-app.get('/api/sync', (req, res) => res.json({ notes: allNotes(true), ai: getAi(), server_time: new Date().toISOString() }));
+app.get('/api/sync', (req, res) => res.json({ notes: allNotes(true), ai: getAi(), infos: allInfos(true), server_time: new Date().toISOString() }));
 app.post('/api/sync', (req, res) => {
   const incoming = Array.isArray(req.body?.notes) ? req.body.notes.filter(n => n && n.uid) : [];
   db.transaction(() => {
@@ -139,8 +172,12 @@ app.post('/api/sync', (req, res) => {
     for (const n of incoming) { const c = cur.get(n.uid); if (!c || s(n.updated_at) > s(c.updated_at)) save(n); }
     const ai = req.body?.ai;
     if (ai && Array.isArray(ai.providers) && s(ai.updated_at) > s(getAi().updated_at)) setAi(ai);
+    if (Array.isArray(req.body?.infos)) mergeInfosIn(req.body.infos);
   })();
-  res.json({ notes: allNotes(true), ai: getAi(), server_time: new Date().toISOString() });
+  // useful info is sent incrementally (images are big): the phone lists what it has (uid -> updated_at), we return only what is newer here
+  const have = req.body?.infoIndex && typeof req.body.infoIndex === 'object' ? req.body.infoIndex : null;
+  const infos = have ? allInfos(true).filter(i => !have[i.uid] || s(i.updated_at) > s(have[i.uid])) : allInfos(true);
+  res.json({ notes: allNotes(true), ai: getAi(), infos, infoIndex: Object.fromEntries(allInfos(true).map(i => [i.uid, i.updated_at])), server_time: new Date().toISOString() });
 });
 app.get('/api/sync/token', (req, res) => {
   if (req.viaSync) return res.status(403).json({ error: 'forbidden' });
@@ -173,7 +210,7 @@ app.post('/api/ai/test', async (req, res) => res.json(await testModel(withSavedK
 app.get('/api/export', (req, res) => {
   const ai = getAi();
   if (req.query.keys !== '1') ai.providers = ai.providers.map(p => ({ ...p, apiKey: '' }));
-  res.json({ app: 'smart-notes', version: 3, exported_at: new Date().toISOString(), notes: allNotes(true), ai });
+  res.json({ app: 'smart-notes', version: 3, exported_at: new Date().toISOString(), notes: allNotes(true), ai, infos: allInfos(true) });
 });
 app.post('/api/import', (req, res) => {
   const b = req.body || {};
@@ -186,6 +223,14 @@ app.post('/api/import', (req, res) => {
       notes.forEach(n => save({ ...n, updated_at: now }));
     } else mergeNotes(allNotes(true), notes).forEach(save);
     if (b.importAi && b.ai && Array.isArray(b.ai.providers)) setAi({ ...b.ai, updated_at: now }, true);
+    if (Array.isArray(b.infos)) {
+      const infos = b.infos.filter(i => i && i.uid);
+      if (b.mode === 'replace') {
+        const keep = new Set(infos.map(i => i.uid));
+        for (const i of allInfos()) if (!keep.has(i.uid)) saveInfo({ ...i, deleted: 1, image: '', updated_at: now });
+        infos.forEach(i => saveInfo({ ...i, updated_at: now }));
+      } else mergeInfosIn(infos);
+    }
   })();
   res.json({ imported: notes.length });
 });

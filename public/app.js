@@ -1,5 +1,5 @@
 // Smart Notes UI – identical on the web panel and in the Android app
-import { search, highlight, byDate, byPinThenDate, DEFAULT_PROVIDERS, uuid, faDate, faNum, kindsOf, KIND_FILTERS, DATE_FILTERS, inDateRange, buildTree, buildTimeline, onThisDay, topicStats, related, noteDate } from './core.js';
+import { normalize, search, highlight, byDate, byPinThenDate, DEFAULT_PROVIDERS, uuid, faDate, faNum, kindsOf, KIND_FILTERS, DATE_FILTERS, inDateRange, buildTree, buildTimeline, onThisDay, topicStats, related, noteDate } from './core.js';
 import { RemoteStore, LocalStore } from './store.js';
 
 const $ = s => document.querySelector(s);
@@ -26,10 +26,11 @@ let page = 'home';
 // ------------------------------------------------------------ data
 async function reload() {
   try { notes = (await store.all()).sort(byDate); } catch (e) { if (e.message !== 'auth') toast('خطا: ' + e.message); }
+  reloadInfos();
   $('#cat-list').innerHTML = [...new Set(notes.map(n => n.category))].map(c => `<option value="${esc(c)}">`).join('');
   render();
 }
-function render() { if (page === 'home') renderHome(); if (page === 'table') renderTable(); if (page === 'browse') renderBrowse(); }
+function render() { if (page === 'home') renderHome(); if (page === 'table') renderTable(); if (page === 'browse') renderBrowse(); if (page === 'info') renderInfos(); }
 
 // ------------------------------------------------------------ navigation
 function go(p) {
@@ -165,6 +166,137 @@ async function save() {
 $('#save').onclick = save;
 $('#raw').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save(); });
 
+// ------------------------------------------------------------ useful info: everyday links, texts and images (the AI never sees these)
+let infos = [];
+async function reloadInfos() {
+  try { infos = (await store.infos()).sort((a, b) => (a.ord || 0) - (b.ord || 0) || String(b.created_at).localeCompare(String(a.created_at))); }
+  catch (e) { if (e.message !== 'auth') toast('خطا: ' + e.message); }
+  if (page === 'info') renderInfos();
+}
+const firstUrl = t => (String(t || '').match(/https?:\/\/[^\s<>"']+/) || [])[0];
+function renderInfos() {
+  const q = normalize($('#qi').value);
+  const list = q ? infos.filter(i => q.split(' ').every(w => normalize(i.title + ' ' + i.text).includes(w))) : infos;
+  $('#infos').innerHTML = list.map(i => {
+    const url = firstUrl(i.text);
+    return `<div class="icard" data-uid="${esc(i.uid)}">
+      ${i.image ? `<img class="ithumb" src="${esc(i.image)}" alt="" data-act="view" loading="lazy" />` : ''}
+      <div class="ibody" data-act="${i.text ? 'copy' : i.image ? 'view' : 'edit'}" title="${i.text ? 'برای کپی بزنید' : ''}">
+        ${i.title ? `<div class="ititle">${esc(i.title)}</div>` : ''}
+        ${i.text ? `<div class="itext">${esc(i.text)}</div>` : ''}
+      </div>
+      <div class="iacts">
+        ${i.text ? '<button data-act="copy" class="primary">📋 کپی</button>' : ''}
+        ${url ? `<button data-act="open">🔗 باز کردن</button>` : ''}
+        ${i.image ? '<button data-act="img">🖼️ کپی عکس</button>' : ''}
+        <span class="grow"></span><button data-act="edit" title="ویرایش">✏️</button>
+      </div></div>`;
+  }).join('') || `<p class="hint">${infos.length ? 'چیزی پیدا نشد.' : 'چیزهایی که هر روز لازم دارید (لینک، شماره کارت، آدرس، عکس کارت ملی…) را اینجا بگذارید تا با یک لمس کپی شوند. 🔒 این بخش هیچ‌وقت برای هوش مصنوعی فرستاده نمی‌شود.'}</p>`;
+  $$('#infos [data-act]').forEach(el => el.onclick = async e => {
+    e.stopPropagation();
+    const i = infos.find(x => x.uid === el.closest('.icard').dataset.uid); if (!i) return;
+    const act = el.dataset.act;
+    if (act === 'copy') toast(await copyText(i.text) ? '✅ کپی شد' + (i.title ? ': ' + i.title : '') : 'کپی نشد');
+    else if (act === 'open') window.open(firstUrl(i.text), '_blank', 'noopener');
+    else if (act === 'view') openInfoView(i);
+    else if (act === 'img') copyImage(i);
+    else if (act === 'edit') openInfoEditor(i);
+  });
+}
+$('#qi').addEventListener('input', renderInfos);
+
+// images are shrunk on the device before saving (max 1800px, JPEG) so sync stays light
+function shrinkImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image(); const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const max = 1800, k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url); resolve(c.toDataURL('image/jpeg', 0.88));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('عکس خوانده نشد')); };
+    img.src = url;
+  });
+}
+const dataUrlToBlob = async d => (await fetch(d)).blob();
+async function pngBlob(d) {
+  const img = new Image(); img.src = d; await img.decode();
+  const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight; c.getContext('2d').drawImage(img, 0, 0);
+  return new Promise(r => c.toBlob(r, 'image/png'));
+}
+const fileName = i => (i.title || 'image').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) + '.jpg';
+async function shareImage(i) {
+  if (isApp) {
+    try {
+      const name = 'info-' + Date.now() + '.jpg';
+      const r = await native('Filesystem', 'writeFile', { path: name, data: i.image.split(',')[1], directory: 'CACHE' });
+      await native('Share', 'share', { title: i.title || '', files: [r.uri] });
+    } catch (e) { if (!/cancel/i.test(String(e?.message || e))) toast('اشتراک ممکن نشد'); }
+    return;
+  }
+  try { const f = new File([await dataUrlToBlob(i.image)], fileName(i), { type: 'image/jpeg' }); if (navigator.canShare?.({ files: [f] })) return await navigator.share({ files: [f], title: i.title || '' }); } catch {}
+  const a = document.createElement('a'); a.href = i.image; a.download = fileName(i); a.click(); toast('⬇️ عکس دانلود شد');
+}
+async function copyImage(i) {
+  try {
+    if (navigator.clipboard?.write && window.ClipboardItem && window.isSecureContext) {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob(i.image) })]); return toast('✅ عکس کپی شد؛ هر جا خواستید Paste کنید');
+    }
+  } catch {}
+  shareImage(i); // no image clipboard here (http or Android WebView): share sheet / download instead
+}
+let viewing = null;
+function openInfoView(i) { viewing = i; $('#iv-title').textContent = i.title || ''; $('#iv-img').src = i.image; $('#info-view').showModal(); }
+$('#info-view').addEventListener('close', () => {
+  const a = $('#info-view').returnValue, i = viewing; viewing = null; $('#info-view').returnValue = '';
+  if (!i) return; if (a === 'copy') copyImage(i); else if (a === 'share') shareImage(i);
+});
+
+let infoEditing = null, infoImage = '';
+function setInfoImage(d) { infoImage = d || ''; const p = $('#info-preview'); p.hidden = !infoImage; p.src = infoImage; $('#info-rmimg').hidden = !infoImage; }
+function openInfoEditor(i) {
+  infoEditing = i || { uid: uuid() }; const f = $('#info-form');
+  $('#info-head').textContent = i ? 'ویرایش' : 'افزودن به اطلاعات کاربردی';
+  f.title.value = i?.title || ''; f.text.value = i?.text || ''; setInfoImage(i?.image);
+  $('#info-del').hidden = !i; $('#info-top-btn').hidden = !i;
+  $('#info-editor').returnValue = ''; $('#info-editor').showModal();
+  if (!i) setTimeout(() => f.title.focus(), 50);
+}
+$('#info-add').onclick = () => openInfoEditor(null);
+async function takeImage(file) {
+  if (!file || !file.type.startsWith('image/')) return false;
+  try { setInfoImage(await shrinkImage(file)); return true; } catch (e) { toast('❌ ' + e.message); return true; }
+}
+$('#info-file').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; await takeImage(f); };
+$('#info-editor').addEventListener('paste', async e => {
+  const f = [...(e.clipboardData?.items || [])].find(x => x.type.startsWith('image/'))?.getAsFile();
+  if (f) { e.preventDefault(); await takeImage(f); }
+});
+// buttons that keep the dialog open
+$('#info-paste').onclick = async e => {
+  e.preventDefault();
+  try {
+    for (const it of await navigator.clipboard.read()) { const t = it.types.find(x => x.startsWith('image/')); if (t) { await takeImage(new File([await it.getType(t)], 'p', { type: t })); return; } }
+    toast('عکسی در کلیپ‌بورد نیست');
+  } catch { toast('اینجا چسباندن مستقیم ممکن نیست؛ «انتخاب عکس» را بزنید' + (isApp ? '' : ' یا Ctrl+V')); }
+};
+$('#info-rmimg').onclick = e => { e.preventDefault(); setInfoImage(''); };
+$('#info-editor').addEventListener('close', async () => {
+  const a = $('#info-editor').returnValue, f = $('#info-form'), i = infoEditing; infoEditing = null;
+  if (!i || !a || a === 'cancel') return;
+  try {
+    const minOrd = Math.min(0, ...infos.map(x => x.ord || 0));
+    if (a === 'save') {
+      const item = { uid: i.uid, title: f.title.value.trim(), text: f.text.value.trim(), image: infoImage, ord: i.ord ?? minOrd - 1 };
+      if (!item.title && !item.text && !item.image) return toast('چیزی برای ذخیره نیست');
+      await store.saveInfo(item); toast('✅ ذخیره شد');
+    } else if (a === 'top') { await store.saveInfo({ ...i, ord: minOrd - 1 }); toast('⬆️ اول فهرست شد'); }
+    else if (a === 'delete') { if (!confirm('حذف شود؟')) return; await store.removeInfo(i.uid); toast('حذف شد'); }
+    await reloadInfos(); autoSync();
+  } catch (e) { toast('خطا: ' + e.message); }
+});
+
 // ------------------------------------------------------------ page 2: search + table
 let cat = null, sub = null;
 function renderTable() {
@@ -244,7 +376,7 @@ async function loadSettings() {
   // key saved but no cards yet -> fetch the list automatically
   settings.providers.filter(p => p.hasKey && !modelState[p.id]).forEach(p => fetchModels(p));
   $('#logout').hidden = !settings.auth;
-  $('#version').textContent = (isApp ? 'اپ اندروید' : 'پنل وب') + ' · Smart Notes v4.1';
+  $('#version').textContent = (isApp ? 'اپ اندروید' : 'پنل وب') + ' · Smart Notes v4.2';
   if (!isApp) {
     $('#server-web').hidden = false;
     fetch('/api/info').then(r => r.json()).then(i => $('#version').textContent = 'پنل وب · Smart Notes v' + i.version).catch(() => {});
@@ -385,7 +517,7 @@ $('#sync-now').onclick = async () => {
 async function autoSync() {
   if (!isApp || !(await store.server())) return;
   try {
-    await store.sync(); notes = (await store.all()).sort(byDate); render(); updateBadge();
+    await store.sync(); notes = (await store.all()).sort(byDate); await reloadInfos(); render(); updateBadge();
     if (page === 'settings' && !document.querySelector('#providers :focus')) { const keep = JSON.stringify(settings); const fresh = await store.getSettings(); if (JSON.stringify(fresh) !== keep && !Object.keys(modelState).length) { settings = fresh; renderProviders(); } }
   } catch { updateBadge(true); }
 }
@@ -444,5 +576,5 @@ $('#login-form').addEventListener('submit', async e => {
   renderFilters(); await reload(); updateBadge();
   if (isApp) { autoSync(); store.retryPending().then(n => n && reload()); }
   document.addEventListener('visibilitychange', () => { if (document.hidden) return; isApp ? autoSync() : reload(); });
-  setInterval(() => { if (document.hidden || $('#editor').open) return; isApp ? autoSync() : reload(); }, isApp ? 60000 : 30000);
+  setInterval(() => { if (document.hidden || $('#editor').open || $('#info-editor').open) return; isApp ? autoSync() : reload(); }, isApp ? 60000 : 30000);
 })();

@@ -26,6 +26,16 @@
     <div id="results1" class="list"></div>
   </section>
 
+  <!-- PAGE: useful info (links, texts, images for everyday use; the AI never sees this) -->
+  <section id="page-info" class="page">
+    <div class="brand">📎 اطلاعات کاربردی <span class="badge" title="این بخش جدا ذخیره می‌شود و هیچ‌وقت برای هوش مصنوعی فرستاده نمی‌شود">🔒 بدون دسترسی هوش مصنوعی</span></div>
+    <div class="row info-top">
+      <div class="searchbox"><span>🔍</span><input id="qi" type="search" placeholder="جستجو در اطلاعات کاربردی…" autocomplete="off" /></div>
+      <button id="info-add" class="primary">➕ افزودن</button>
+    </div>
+    <div id="infos" class="infos"></div>
+  </section>
+
   <!-- PAGE: browse (tree / timeline) -->
   <section id="page-browse" class="page">
     <div class="seg"><button data-view="tree" class="active">🌳 درختی</button><button data-view="time">🗓️ خط زمانی</button></div>
@@ -98,6 +108,7 @@
 
   <nav id="tabs">
     <button data-page="home" class="active"><span>🏠</span>خانه</button>
+    <button data-page="info"><span>📎</span>کاربردی</button>
     <button data-page="browse"><span>🌳</span>مرور</button>
     <button data-page="table"><span>📋</span>جدول</button>
     <button data-page="settings"><span>⚙️</span>تنظیمات</button>
@@ -134,6 +145,39 @@
         <button value="cancel" formnovalidate>بستن</button>
       </div>
       <div id="related"></div>
+    </form>
+  </dialog>
+  <dialog id="info-editor">
+    <form method="dialog" id="info-form">
+      <h3 id="info-head">افزودن</h3>
+      <label>عنوان<input name="title" placeholder="مثلاً: شماره کارت، لینک جلسه، آدرس محل کار" /></label>
+      <label>متن یا لینک (با یک لمس کپی می‌شود)<textarea name="text" rows="3" dir="auto"></textarea></label>
+      <div class="info-img">
+        <img id="info-preview" alt="" hidden />
+        <div class="row">
+          <label class="btn">🖼️ انتخاب عکس <input type="file" id="info-file" accept="image/*" hidden /></label>
+          <button type="button" id="info-paste">📋 چسباندن عکس</button>
+          <button type="button" id="info-rmimg" class="danger" hidden>حذف عکس</button>
+        </div>
+        <p class="hint">روی کامپیوتر می‌توانید عکس را با Ctrl+V هم اینجا بچسبانید.</p>
+      </div>
+      <div class="row">
+        <button value="save" class="primary">ذخیره</button>
+        <button value="top" id="info-top-btn" formnovalidate>⬆️ اول فهرست</button>
+        <button value="delete" id="info-del" class="danger" formnovalidate>حذف</button>
+        <button value="cancel" formnovalidate>بستن</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="info-view">
+    <form method="dialog">
+      <h3 id="iv-title"></h3>
+      <img id="iv-img" alt="" />
+      <div class="row">
+        <button value="copy" class="primary">📋 کپی عکس</button>
+        <button value="share">📤 اشتراک / ذخیره</button>
+        <button value="close">بستن</button>
+      </div>
     </form>
   </dialog>
   <dialog id="topic">

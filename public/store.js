@@ -35,6 +35,10 @@ export class RemoteStore {
   exportAll(keys) { return this.api('/export' + (keys ? '?keys=1' : '')); }
   importAll(data, mode, importAi) { return this.api('/import', { method: 'POST', body: { ...data, mode, importAi } }); }
   syncToken() { return this.api('/sync/token'); }
+  // useful info (never sent to the AI)
+  infos() { return this.api('/infos'); }
+  saveInfo(i) { return this.api('/infos/' + encodeURIComponent(i.uid), { method: 'PUT', body: i }); }
+  removeInfo(uid) { return this.api('/infos/' + encodeURIComponent(uid), { method: 'DELETE' }); }
   regenerateSyncToken() { return this.api('/sync/token/regenerate', { method: 'POST' }); }
 }
 
@@ -47,8 +51,13 @@ async function readJson(r, url) {
 // ---------------------------------------------------------------- local (Android, offline)
 function idb() {
   return new Promise((resolve, reject) => {
-    const r = indexedDB.open('smart-notes', 1);
-    r.onupgradeneeded = () => { r.result.createObjectStore('notes', { keyPath: 'uid' }); r.result.createObjectStore('kv'); };
+    const r = indexedDB.open('smart-notes', 2);
+    r.onupgradeneeded = () => {
+      const have = r.result.objectStoreNames;
+      if (!have.contains('notes')) r.result.createObjectStore('notes', { keyPath: 'uid' });
+      if (!have.contains('kv')) r.result.createObjectStore('kv');
+      if (!have.contains('infos')) r.result.createObjectStore('infos', { keyPath: 'uid' }); // useful info: separate store, never given to the AI
+    };
     r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
   });
 }
@@ -59,7 +68,7 @@ const tx = (db, store, mode, fn) => new Promise((resolve, reject) => {
 
 export class LocalStore {
   constructor() { this.kind = 'local'; this.db = null; this.cache = null; }
-  async init() { this.db = await idb(); this.cache = await tx(this.db, 'notes', 'readonly', s => s.getAll()); }
+  async init() { this.db = await idb(); this.cache = await tx(this.db, 'notes', 'readonly', s => s.getAll()); this.infoCache = await tx(this.db, 'infos', 'readonly', s => s.getAll()); }
   async kvGet(k, def) { const v = await tx(this.db, 'kv', 'readonly', s => s.get(k)); return v === undefined ? def : v; }
   kvSet(k, v) { return tx(this.db, 'kv', 'readwrite', s => s.put(v, k)); }
   async put(n) { n = JSON.parse(JSON.stringify(n)); await tx(this.db, 'notes', 'readwrite', s => s.put(n)); const i = this.cache.findIndex(x => x.uid === n.uid); i >= 0 ? (this.cache[i] = n) : this.cache.push(n); return n; }
@@ -85,6 +94,16 @@ export class LocalStore {
     for (const n of this.cache.filter(x => !x.deleted && x.ai_status !== 'done')) { await this.classify(n); if (n.ai_status === 'done') done++; }
     return done;
   }
+
+  // ---- useful info (separate store; classify() only ever sees this.cache = notes)
+  async infos() { return this.infoCache.filter(i => !i.deleted); }
+  async putInfo(i) { i = JSON.parse(JSON.stringify(i)); await tx(this.db, 'infos', 'readwrite', s => s.put(i)); const k = this.infoCache.findIndex(x => x.uid === i.uid); k >= 0 ? (this.infoCache[k] = i) : this.infoCache.push(i); return i; }
+  async saveInfo(i) {
+    const old = this.infoCache.find(x => x.uid === i.uid); const now = new Date().toISOString();
+    return this.putInfo({ ...(old || {}), ...i, created_at: old?.created_at || now, updated_at: now });
+  }
+  async removeInfo(uid) { const i = this.infoCache.find(x => x.uid === uid); if (i) await this.saveInfo({ ...i, deleted: 1, image: '' }); }
+  async mergeInfos(list) { for (const i of list || []) { if (!i?.uid) continue; const c = this.infoCache.find(x => x.uid === i.uid); if (!c || String(i.updated_at) > String(c.updated_at)) await this.putInfo(i); } }
 
   async getAi() {
     return {
@@ -115,7 +134,7 @@ export class LocalStore {
   async exportAll(keys) {
     const ai = await this.getAi();
     if (!keys) ai.providers = ai.providers.map(p => ({ ...p, apiKey: '' }));
-    return { app: 'smart-notes', version: 3, exported_at: new Date().toISOString(), notes: this.cache, ai };
+    return { app: 'smart-notes', version: 3, exported_at: new Date().toISOString(), notes: this.cache, ai, infos: this.infoCache };
   }
   async importAll(data, mode, importAi) {
     const now = new Date().toISOString();
@@ -128,6 +147,14 @@ export class LocalStore {
     if (importAi && data.ai?.providers) {
       const old = (await this.getAi()).providers;
       await this.setAi({ ...data.ai, providers: data.ai.providers.map(p => ({ ...p, apiKey: p.apiKey || old.find(o => o.id === p.id)?.apiKey || '' })), updated_at: now });
+    }
+    if (Array.isArray(data.infos)) {
+      const infos = data.infos.filter(i => i && i.uid);
+      if (mode === 'replace') {
+        const keep = new Set(infos.map(i => i.uid));
+        for (const i of this.infoCache) if (!keep.has(i.uid) && !i.deleted) await this.putInfo({ ...i, deleted: 1, image: '', updated_at: now });
+        for (const i of infos) await this.putInfo({ ...i, updated_at: now });
+      } else await this.mergeInfos(infos);
     }
     return { imported: incoming.length };
   }
@@ -144,7 +171,9 @@ export class LocalStore {
     // first connection: AI settings come from the server, notes of both sides are merged
     if (remote.ai?.providers) await this.setAi(remote.ai);
     await this.replaceAll(mergeNotes(this.cache, remote.notes || []));
+    await this.mergeInfos(remote.infos);
     await this.kvSet('server', { url, key, lastSync: null });
+    await this.kvSet('infoServerIndex', remote.infos ? Object.fromEntries(remote.infos.map(i => [i.uid, i.updated_at])) : {});
     return { url, ...(await this.sync()) };
   }
   async disconnect() { await this.kvSet('server', null); }
@@ -155,13 +184,19 @@ export class LocalStore {
       const srv = await this.server(); if (!srv) throw new Error('به سروری وصل نیستید');
       let r;
       try {
+        // useful info goes incrementally: only items the server doesn't have yet (or has older), plus an index so it sends back only what we lack
+        const sIdx = await this.kvGet('infoServerIndex', {});
+        const infos = this.infoCache.filter(i => !sIdx[i.uid] || String(i.updated_at) > String(sIdx[i.uid]));
+        const infoIndex = Object.fromEntries(this.infoCache.map(i => [i.uid, i.updated_at]));
         r = await fetch(srv.url + '/api/sync', { method: 'POST', headers: { Authorization: 'Bearer ' + srv.key, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ notes: this.cache, ai: await this.getAi() }) });
+          body: JSON.stringify({ notes: this.cache, ai: await this.getAi(), infos, infoIndex }) });
       } catch { throw new Error('سرور در دسترس نیست'); }
       if (r.status === 401) throw new Error('توکن باطل شده؛ توکن جدید را وارد کنید');
       if (!r.ok) throw new Error('همگام‌سازی ناموفق بود');
       const remote = await readJson(r, srv.url);
       await this.replaceAll(mergeNotes(this.cache, remote.notes || []));
+      if (remote.infos) await this.mergeInfos(remote.infos);
+      if (remote.infoIndex) await this.kvSet('infoServerIndex', remote.infoIndex);
       const mine = await this.getAi();
       if (remote.ai?.providers && String(remote.ai.updated_at) > String(mine.updated_at)) await this.setAi(remote.ai);
       srv.lastSync = new Date().toISOString(); await this.kvSet('server', srv);
